@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # Hive Minion Worker Container
+  hive-minion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Multi-stage build targets
+      target: runtime
+    image: cortexair/hive-minion:latest
+    container_name: hive-minion-${MINION_ID:-default}
+
+    # Resource limits to prevent resource exhaustion
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+          pids: 100  # Limit number of processes
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true  # Prevent privilege escalation
+      - seccomp:unconfined      # Claude Code may need various syscalls
+
+    # Capabilities: drop all, add only what's needed
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+    # Read-only root filesystem for security (workspace is writable)
+    read_only: true
+
+    # Temporary filesystem for /tmp
+    tmpfs:
+      - /tmp:size=512M,mode=1777,noexec,nosuid,nodev
+      - /home/minion/.npm:size=256M,uid=1000,gid=1000
+
+    # Volume management
+    volumes:
+      # Task workspace - main working directory
+      - type: bind
+        source: ${WORKSPACE_PATH:-./workspace}
+        target: /home/minion/workspace
+
+      # Logs directory for persistent logging
+      - type: volume
+        source: minion-logs
+        target: /home/minion/logs
+
+      # Optional: Claude config persistence
+      - type: volume
+        source: minion-claude-config
+        target: /home/minion/.claude
+
+    # Environment configuration
+    environment:
+      - KEEP_ALIVE=${KEEP_ALIVE:-false}
+      - NODE_ENV=production
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MINION_ID=${MINION_ID:-default}
+
+    # Network isolation
+    networks:
+      - hive-network
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check override (if needed)
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /home/minion/workspace/STATUS ] || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "minion_id,task_id"
+
+    # Optional: CPU affinity and other advanced settings
+    # cpuset: "0,1"
+    # mem_swappiness: 0
+
+  # Optional: Redis for task queue (future enhancement)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: hive-redis
+  #   networks:
+  #     - hive-network
+  #   volumes:
+  #     - redis-data:/data
+  #   restart: unless-stopped
+
+# Named volumes for persistence
+volumes:
+  minion-logs:
+    driver: local
+    name: hive-minion-logs-${MINION_ID:-default}
+
+  minion-claude-config:
+    driver: local
+    name: hive-minion-config-${MINION_ID:-default}
+
+  # redis-data:
+  #   driver: local
+
+# Network isolation
+networks:
+  hive-network:
+    driver: bridge
+    name: hive-network
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+    # Network isolation options
+    driver_opts:
+      com.docker.network.bridge.name: br-hive
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
