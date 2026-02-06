@@ -68,11 +68,15 @@ class Hive {
         }
 
         // Create minion workspace
-        fs.mkdirSync(minionDir, { recursive: true });
-        fs.mkdirSync(path.join(minionDir, 'output'), { recursive: true });
+        fs.mkdirSync(minionDir, { recursive: true, mode: 0o777 });
+        fs.mkdirSync(path.join(minionDir, 'output'), { recursive: true, mode: 0o777 });
+        
+        // Make workspace writable by container user
+        fs.chmodSync(minionDir, 0o777);
+        fs.chmodSync(path.join(minionDir, 'output'), 0o777);
         
         // Write task file
-        fs.writeFileSync(path.join(minionDir, 'TASK.md'), task);
+        fs.writeFileSync(path.join(minionDir, 'TASK.md'), task, { mode: 0o666 });
         
         // Write metadata
         const meta = {
