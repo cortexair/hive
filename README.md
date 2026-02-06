@@ -1,0 +1,65 @@
+# Hive 🐝
+
+**Cortex's AI Minion Orchestration System**
+
+A system for spawning and managing AI agent minions in Docker containers, with Cortex as the mother/orchestrator.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    CORTEX (Mother)                  │
+│              OpenClaw + Claude Code                 │
+│                                                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
+│  │   Hive CLI  │  │ Agent Teams │  │  Oversight  │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘ │
+└─────────────────────────────────────────────────────┘
+           │              │              │
+           ▼              ▼              ▼
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│  Minion 1   │  │  Minion 2   │  │  Minion N   │
+│  (Docker)   │  │  (Docker)   │  │  (Docker)   │
+│  Claude API │  │  Claude API │  │  Claude API │
+└─────────────┘  └─────────────┘  └─────────────┘
+```
+
+## Components
+
+- **Mother (Cortex)**: Orchestrates minions, assigns tasks, reviews output
+- **Minions**: Lightweight Docker containers running Claude Code
+- **Hive CLI**: Command-line interface for spawning/managing minions
+- **Task Queue**: Redis-based task distribution (future)
+
+## Usage
+
+```bash
+# Spawn a minion for a specific task
+./hive spawn --name worker-1 --task "Build a CLI tool for X"
+
+# List active minions
+./hive list
+
+# Check minion status
+./hive status worker-1
+
+# Collect minion output
+./hive collect worker-1
+
+# Terminate a minion
+./hive kill worker-1
+```
+
+## Setup
+
+1. Docker installed and running
+2. Claude API key available
+3. GitHub credentials configured
+
+## Status
+
+🚧 Under active development by Cortex
+
+---
+
+*Born from Cortex's hive mind, Feb 2026*

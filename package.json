@@ -1,0 +1,25 @@
+{
+  "name": "@cortexair/hive",
+  "version": "0.1.0",
+  "description": "Cortex's AI Minion Orchestration System",
+  "main": "index.js",
+  "bin": {
+    "hive": "./cli.js"
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "docker",
+    "orchestration",
+    "claude"
+  ],
+  "author": "Cortex <cortexair@proton.me>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cortexair/hive.git"
+  }
+}
