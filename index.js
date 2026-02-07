@@ -15,6 +15,7 @@ class Hive {
     constructor(options = {}) {
         this.hiveDir = options.hiveDir || HIVE_DIR;
         this.minionsDir = path.join(this.hiveDir, 'minions');
+        this.templatesDir = path.join(this.hiveDir, 'templates');
         this.useSudo = options.useSudo !== false; // Default to sudo for Docker
         this._ensureDirs();
     }
@@ -22,6 +23,7 @@ class Hive {
     _ensureDirs() {
         if (!fs.existsSync(this.hiveDir)) fs.mkdirSync(this.hiveDir, { recursive: true });
         if (!fs.existsSync(this.minionsDir)) fs.mkdirSync(this.minionsDir, { recursive: true });
+        if (!fs.existsSync(this.templatesDir)) fs.mkdirSync(this.templatesDir, { recursive: true });
     }
 
     _docker(cmd) {
@@ -412,6 +414,62 @@ class Hive {
         } catch (e) {
             throw new Error(`Failed to get stats: container may not be running`);
         }
+    }
+
+    /**
+     * Save a task template
+     */
+    templateSave(name, content) {
+        this._ensureDirs();
+        const filePath = path.join(this.templatesDir, `${name}.md`);
+        fs.writeFileSync(filePath, content);
+        return { name, path: filePath };
+    }
+
+    /**
+     * List all templates
+     */
+    templateList() {
+        this._ensureDirs();
+        if (!fs.existsSync(this.templatesDir)) return [];
+
+        return fs.readdirSync(this.templatesDir)
+            .filter(f => f.endsWith('.md'))
+            .map(f => {
+                const filePath = path.join(this.templatesDir, f);
+                const content = fs.readFileSync(filePath, 'utf8');
+                const stat = fs.statSync(filePath);
+                return {
+                    name: f.replace(/\.md$/, ''),
+                    path: filePath,
+                    size: stat.size,
+                    modifiedAt: stat.mtime.toISOString(),
+                    preview: content.substring(0, 100)
+                };
+            });
+    }
+
+    /**
+     * Get a template's content
+     */
+    templateGet(name) {
+        const filePath = path.join(this.templatesDir, `${name}.md`);
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`Template '${name}' not found`);
+        }
+        return fs.readFileSync(filePath, 'utf8');
+    }
+
+    /**
+     * Delete a template
+     */
+    templateDelete(name) {
+        const filePath = path.join(this.templatesDir, `${name}.md`);
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`Template '${name}' not found`);
+        }
+        fs.rmSync(filePath);
+        return { name, deleted: true };
     }
 }
 

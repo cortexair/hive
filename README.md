@@ -35,19 +35,49 @@ A system for spawning and managing AI agent minions in Docker containers, with C
 
 ```bash
 # Spawn a minion for a specific task
-./hive spawn --name worker-1 --task "Build a CLI tool for X"
+hive spawn worker-1 "Build a CLI tool for X"
+
+# Spawn from a file
+hive spawn researcher-1 -f research-task.md
+
+# Spawn from a saved template
+hive spawn worker-2 -t code-review
 
 # List active minions
-./hive list
+hive list
 
 # Check minion status
-./hive status worker-1
+hive status worker-1
 
 # Collect minion output
-./hive collect worker-1
+hive collect worker-1
 
 # Terminate a minion
-./hive kill worker-1
+hive kill worker-1
+```
+
+## Templates
+
+Reusable task definitions stored in `~/.hive/templates/` as `.md` files.
+
+```bash
+# Save a template from a file
+hive template save code-review -f review-task.md
+
+# Save a template from stdin
+echo "Review the code for bugs and security issues" | hive template save quick-review
+
+# List all templates
+hive template list
+
+# View a template
+hive template show code-review
+
+# Spawn a minion using a template
+hive spawn reviewer-1 -t code-review
+
+# Delete a template
+hive template delete code-review
 ```
 
 ## Setup

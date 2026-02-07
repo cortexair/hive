@@ -20,22 +20,27 @@ function usage() {
 Usage: hive <command> [options]
 
 Commands:
-  spawn <name> <task>     Spawn a new minion with a task
-  spawn <name> -f <file>  Spawn with task from file
-  list [--json]           List all minions
-  status <name> [--json]  Get minion status and output
-  version                 Show Hive version
-  stats <name>            Get resource usage (CPU, memory, I/O)
-  logs <name> [--lines N] Get last N lines of logs (default 50)
-  watch <name>            Stream live logs from a minion
-  exec <name> [command]   Run a command in a minion's container (default: /bin/bash)
-  collect <name>          Collect minion output
-  pause <name>            Pause a running minion
-  resume <name>           Resume a paused minion
-  restart <name>          Restart a stopped minion
-  kill <name>             Terminate a minion
-  cleanup                 Remove completed minions
-  build                   Build the minion Docker image
+  spawn <name> <task>          Spawn a new minion with a task
+  spawn <name> -f <file>       Spawn with task from file
+  spawn <name> -t <template>   Spawn with a saved template
+  list [--json]                List all minions
+  status <name> [--json]       Get minion status and output
+  version                      Show Hive version
+  stats <name>                 Get resource usage (CPU, memory, I/O)
+  logs <name> [--lines N]      Get last N lines of logs (default 50)
+  watch <name>                 Stream live logs from a minion
+  exec <name> [command]        Run a command in a minion's container (default: /bin/bash)
+  collect <name>               Collect minion output
+  pause <name>                 Pause a running minion
+  resume <name>                Resume a paused minion
+  restart <name>               Restart a stopped minion
+  kill <name>                  Terminate a minion
+  cleanup                      Remove completed minions
+  build                        Build the minion Docker image
+  template save <name>         Save a template from stdin or --file
+  template list                List all saved templates
+  template show <name>         Display a template
+  template delete <name>       Delete a template
 
 Options:
   --keep-alive           Keep container running after task
@@ -44,6 +49,11 @@ Options:
 Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
   hive spawn researcher-1 -f research-task.md
+  hive spawn worker-2 -t code-review
+  hive template save code-review -f review-task.md
+  echo "Review the PR" | hive template save quick-review
+  hive template list
+  hive template show code-review
   hive list
   hive status worker-1
   hive kill worker-1
@@ -69,6 +79,9 @@ function parseArgs(args) {
             }
         } else if (args[i] === '-f' && args[i + 1]) {
             result.file = args[i + 1];
+            i += 2;
+        } else if (args[i] === '-t' && args[i + 1]) {
+            result.template = args[i + 1];
             i += 2;
         } else {
             result._.push(args[i]);
@@ -116,10 +129,12 @@ async function main() {
 
                 if (parsed.file) {
                     task = fs.readFileSync(parsed.file, 'utf8');
+                } else if (parsed.template) {
+                    task = hive.templateGet(parsed.template);
                 }
 
                 if (!task) {
-                    console.error('❌ Task required: hive spawn <name> "task" or hive spawn <name> -f file.md');
+                    console.error('❌ Task required: hive spawn <name> "task" or hive spawn <name> -f file.md or hive spawn <name> -t template');
                     process.exit(1);
                 }
 
@@ -363,6 +378,88 @@ async function main() {
                     }
                     process.exit(code || 0);
                 });
+                break;
+            }
+
+            case 'template': {
+                const subcommand = parsed._[0];
+
+                switch (subcommand) {
+                    case 'save': {
+                        const name = parsed._[1];
+                        if (!name) {
+                            console.error('❌ Name required: hive template save <name>');
+                            process.exit(1);
+                        }
+
+                        let content;
+                        if (parsed.file) {
+                            content = fs.readFileSync(parsed.file, 'utf8');
+                        } else if (!process.stdin.isTTY) {
+                            content = fs.readFileSync('/dev/stdin', 'utf8');
+                        } else {
+                            console.error('❌ Content required: pipe via stdin or use --file');
+                            process.exit(1);
+                        }
+
+                        const result = hive.templateSave(name, content);
+                        console.log(`📋 Template saved: ${name}`);
+                        console.log(`   Path: ${result.path}`);
+                        break;
+                    }
+
+                    case 'list': {
+                        const templates = hive.templateList();
+
+                        if (parsed.json) {
+                            console.log(JSON.stringify(templates, null, 2));
+                            break;
+                        }
+
+                        if (templates.length === 0) {
+                            console.log('No templates saved');
+                            break;
+                        }
+
+                        console.log('📋 Templates:\n');
+                        for (const t of templates) {
+                            console.log(`  ${t.name}`);
+                            console.log(`   Size: ${t.size} bytes`);
+                            console.log(`   Preview: ${t.preview.replace(/\n/g, ' ').substring(0, 60)}...`);
+                            console.log('');
+                        }
+                        break;
+                    }
+
+                    case 'show': {
+                        const name = parsed._[1];
+                        if (!name) {
+                            console.error('❌ Name required: hive template show <name>');
+                            process.exit(1);
+                        }
+
+                        const content = hive.templateGet(name);
+                        console.log(content);
+                        break;
+                    }
+
+                    case 'delete': {
+                        const name = parsed._[1];
+                        if (!name) {
+                            console.error('❌ Name required: hive template delete <name>');
+                            process.exit(1);
+                        }
+
+                        hive.templateDelete(name);
+                        console.log(`🗑️  Template deleted: ${name}`);
+                        break;
+                    }
+
+                    default:
+                        console.error(`❌ Unknown template command: ${subcommand}`);
+                        console.error('Usage: hive template <save|list|show|delete>');
+                        process.exit(1);
+                }
                 break;
             }
 
