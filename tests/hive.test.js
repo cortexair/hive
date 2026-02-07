@@ -941,6 +941,136 @@ describe('Hive.stats', () => {
     });
 });
 
+// ─── Templates ──────────────────────────────────────────────────────
+
+describe('Hive.templateSave', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('saves template to templates directory', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('my-task', '# Do the thing\nBuild a CLI tool');
+
+        const filePath = path.join(tmp.dir, 'templates', 'my-task.md');
+        assert.ok(fs.existsSync(filePath));
+        assert.equal(fs.readFileSync(filePath, 'utf8'), '# Do the thing\nBuild a CLI tool');
+    });
+
+    it('returns name and path', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const result = hive.templateSave('test-tpl', 'content');
+
+        assert.equal(result.name, 'test-tpl');
+        assert.equal(result.path, path.join(tmp.dir, 'templates', 'test-tpl.md'));
+    });
+
+    it('overwrites existing template', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('overwrite', 'version 1');
+        hive.templateSave('overwrite', 'version 2');
+
+        const content = fs.readFileSync(path.join(tmp.dir, 'templates', 'overwrite.md'), 'utf8');
+        assert.equal(content, 'version 2');
+    });
+});
+
+describe('Hive.templateList', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns empty array when no templates exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const templates = hive.templateList();
+        assert.deepEqual(templates, []);
+    });
+
+    it('lists saved templates with metadata', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('code-review', 'Review the code for bugs');
+
+        const templates = hive.templateList();
+        assert.equal(templates.length, 1);
+        assert.equal(templates[0].name, 'code-review');
+        assert.ok(templates[0].size > 0);
+        assert.ok(templates[0].modifiedAt);
+        assert.includes(templates[0].preview, 'Review the code');
+    });
+
+    it('lists multiple templates', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('tpl-a', 'Task A');
+        hive.templateSave('tpl-b', 'Task B');
+        hive.templateSave('tpl-c', 'Task C');
+
+        const templates = hive.templateList();
+        assert.equal(templates.length, 3);
+    });
+
+    it('only lists .md files', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('valid', 'content');
+        // Write a non-.md file directly
+        fs.writeFileSync(path.join(tmp.dir, 'templates', 'not-a-template.txt'), 'junk');
+
+        const templates = hive.templateList();
+        assert.equal(templates.length, 1);
+        assert.equal(templates[0].name, 'valid');
+    });
+});
+
+describe('Hive.templateGet', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns template content', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('fetch-me', 'The full template content here');
+
+        const content = hive.templateGet('fetch-me');
+        assert.equal(content, 'The full template content here');
+    });
+
+    it('throws when template does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.templateGet('nonexistent'), 'not found');
+    });
+});
+
+describe('Hive.templateDelete', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('deletes an existing template', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('doomed', 'content');
+
+        hive.templateDelete('doomed');
+        assert.notOk(fs.existsSync(path.join(tmp.dir, 'templates', 'doomed.md')));
+    });
+
+    it('returns name and deleted status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('del-test', 'content');
+
+        const result = hive.templateDelete('del-test');
+        assert.equal(result.name, 'del-test');
+        assert.equal(result.deleted, true);
+    });
+
+    it('throws when template does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.templateDelete('ghost'), 'not found');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {
