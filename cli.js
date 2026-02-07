@@ -24,10 +24,14 @@ Commands:
   spawn <name> -f <file>  Spawn with task from file
   list                    List all minions
   status <name>           Get minion status and output
+  stats <name>            Get resource usage (CPU, memory, I/O)
   logs <name> [--lines N] Get last N lines of logs (default 50)
   watch <name>            Stream live logs from a minion
   exec <name> [command]   Run a command in a minion's container (default: /bin/bash)
   collect <name>          Collect minion output
+  pause <name>            Pause a running minion
+  resume <name>           Resume a paused minion
+  restart <name>          Restart a stopped minion
   kill <name>             Terminate a minion
   cleanup                 Remove completed minions
   build                   Build the minion Docker image
@@ -212,6 +216,62 @@ async function main() {
                 } else {
                     console.log(`Cleaned: ${cleaned.join(', ')}`);
                 }
+                break;
+            }
+
+            case 'pause': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive pause <name>');
+                    process.exit(1);
+                }
+
+                console.log(`⏸️  Pausing minion: ${name}`);
+                hive.pause(name);
+                console.log('✅ Minion paused');
+                break;
+            }
+
+            case 'resume': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive resume <name>');
+                    process.exit(1);
+                }
+
+                console.log(`▶️  Resuming minion: ${name}`);
+                hive.resume(name);
+                console.log('✅ Minion resumed');
+                break;
+            }
+
+            case 'restart': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive restart <name>');
+                    process.exit(1);
+                }
+
+                console.log(`🔄 Restarting minion: ${name}`);
+                hive.restart(name);
+                console.log('✅ Minion restarted');
+                break;
+            }
+
+            case 'stats': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive stats <name>');
+                    process.exit(1);
+                }
+
+                const stats = hive.stats(name);
+                console.log(`📊 Minion: ${name}\n`);
+                console.log(`CPU:     ${stats.CPUPerc || 'N/A'}`);
+                console.log(`Memory:  ${stats.MemUsage || 'N/A'} (${stats.MemPerc || 'N/A'})`);
+                console.log(`Net I/O: ${stats.NetIO || 'N/A'}`);
+                console.log(`Blk I/O: ${stats.BlockIO || 'N/A'}`);
+                console.log(`PIDs:    ${stats.PIDs || 'N/A'}`);
                 break;
             }
 

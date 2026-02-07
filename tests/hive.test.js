@@ -701,6 +701,246 @@ describe('Hive.cleanup', () => {
     });
 });
 
+// ─── Restart ─────────────────────────────────────────────────────────
+
+describe('Hive.restart', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.restart('ghost'), 'not found');
+    });
+
+    it('throws when minion has no container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-container');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-container',
+            containerId: null
+        }, null, 2));
+
+        assert.throws(() => hive.restart('no-container'), 'no container');
+    });
+
+    it('calls docker restart', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'r1', { containerId: 'sha256:r1' });
+
+        hive.restart('r1');
+        const restartCall = hive._dockerCalls.find(c => c.startsWith('restart'));
+        assert.ok(restartCall);
+        assert.includes(restartCall, 'hive-r1');
+    });
+
+    it('updates meta.json with running status and restartedAt', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'r2', { containerId: 'sha256:r2' });
+
+        hive.restart('r2');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'r2', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'running');
+        assert.ok(meta.restartedAt);
+    });
+
+    it('returns name and restarted status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'r3', { containerId: 'sha256:r3' });
+
+        const result = hive.restart('r3');
+        assert.equal(result.name, 'r3');
+        assert.equal(result.status, 'restarted');
+    });
+});
+
+// ─── Pause ───────────────────────────────────────────────────────────
+
+describe('Hive.pause', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.pause('ghost'), 'not found');
+    });
+
+    it('throws when minion has no container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-container');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-container',
+            containerId: null
+        }, null, 2));
+
+        assert.throws(() => hive.pause('no-container'), 'no container');
+    });
+
+    it('calls docker pause', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'p1', { containerId: 'sha256:p1' });
+
+        hive.pause('p1');
+        const pauseCall = hive._dockerCalls.find(c => c.startsWith('pause'));
+        assert.ok(pauseCall);
+        assert.includes(pauseCall, 'hive-p1');
+    });
+
+    it('updates meta.json with paused status and pausedAt', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'p2', { containerId: 'sha256:p2' });
+
+        hive.pause('p2');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'p2', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'paused');
+        assert.ok(meta.pausedAt);
+    });
+
+    it('returns name and paused status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'p3', { containerId: 'sha256:p3' });
+
+        const result = hive.pause('p3');
+        assert.equal(result.name, 'p3');
+        assert.equal(result.status, 'paused');
+    });
+});
+
+// ─── Resume ──────────────────────────────────────────────────────────
+
+describe('Hive.resume', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.resume('ghost'), 'not found');
+    });
+
+    it('throws when minion has no container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-container');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-container',
+            containerId: null
+        }, null, 2));
+
+        assert.throws(() => hive.resume('no-container'), 'no container');
+    });
+
+    it('calls docker unpause', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'u1', { containerId: 'sha256:u1' });
+
+        hive.resume('u1');
+        const unpauseCall = hive._dockerCalls.find(c => c.startsWith('unpause'));
+        assert.ok(unpauseCall);
+        assert.includes(unpauseCall, 'hive-u1');
+    });
+
+    it('updates meta.json with running status and resumedAt', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'u2', { containerId: 'sha256:u2' });
+
+        hive.resume('u2');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'u2', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'running');
+        assert.ok(meta.resumedAt);
+    });
+
+    it('returns name and running status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'u3', { containerId: 'sha256:u3' });
+
+        const result = hive.resume('u3');
+        assert.equal(result.name, 'u3');
+        assert.equal(result.status, 'running');
+    });
+});
+
+// ─── Stats ───────────────────────────────────────────────────────────
+
+describe('Hive.stats', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.stats('ghost'), 'not found');
+    });
+
+    it('throws when minion has no container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-container');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-container',
+            containerId: null
+        }, null, 2));
+
+        assert.throws(() => hive.stats('no-container'), 'no container');
+    });
+
+    it('returns parsed JSON stats from docker', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('stats')) {
+                    return JSON.stringify({
+                        CPUPerc: '0.50%',
+                        MemUsage: '50MiB / 1GiB',
+                        MemPerc: '5.00%',
+                        NetIO: '1kB / 2kB',
+                        BlockIO: '0B / 0B',
+                        PIDs: '5'
+                    });
+                }
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'st1', { containerId: 'sha256:st1' });
+
+        const stats = hive.stats('st1');
+        assert.equal(stats.CPUPerc, '0.50%');
+        assert.equal(stats.MemPerc, '5.00%');
+        assert.equal(stats.PIDs, '5');
+    });
+
+    it('throws when container is not running', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('stats')) throw new Error('container not running');
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'st2', { containerId: 'sha256:st2' });
+
+        assert.throws(() => hive.stats('st2'), 'container may not be running');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

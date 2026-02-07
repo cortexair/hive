@@ -305,6 +305,114 @@ class Hive {
 
         return cleaned;
     }
+
+    /**
+     * Restart a stopped minion
+     */
+    restart(name) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        try {
+            this._docker(`restart hive-${name}`);
+            meta.status = 'running';
+            meta.restartedAt = new Date().toISOString();
+            fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            return { name, status: 'restarted' };
+        } catch (e) {
+            throw new Error(`Failed to restart minion: ${e.message}`);
+        }
+    }
+
+    /**
+     * Pause a running minion
+     */
+    pause(name) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        try {
+            this._docker(`pause hive-${name}`);
+            meta.status = 'paused';
+            meta.pausedAt = new Date().toISOString();
+            fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            return { name, status: 'paused' };
+        } catch (e) {
+            throw new Error(`Failed to pause minion: ${e.message}`);
+        }
+    }
+
+    /**
+     * Resume a paused minion
+     */
+    resume(name) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        try {
+            this._docker(`unpause hive-${name}`);
+            meta.status = 'running';
+            meta.resumedAt = new Date().toISOString();
+            fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            return { name, status: 'running' };
+        } catch (e) {
+            throw new Error(`Failed to resume minion: ${e.message}`);
+        }
+    }
+
+    /**
+     * Get resource stats for a minion
+     */
+    stats(name) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        try {
+            const statsOutput = this._docker(`stats hive-${name} --no-stream --format "{{json .}}"`);
+            return JSON.parse(statsOutput.trim());
+        } catch (e) {
+            throw new Error(`Failed to get stats: container may not be running`);
+        }
+    }
 }
 
 module.exports = { Hive, HIVE_DIR, IMAGE_NAME };
