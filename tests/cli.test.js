@@ -258,3 +258,26 @@ describe('CLI help includes watch', () => {
         assert.includes(output, 'watch');
     });
 });
+
+describe('CLI logs validation', () => {
+    it('errors when name is missing', () => {
+        const { output, exitCode } = runCli('logs');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
+    it('errors when minion does not exist', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('logs nonexistent', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+});
+
+describe('CLI help includes logs', () => {
+    it('shows logs command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'logs');
+    });
+});

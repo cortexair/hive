@@ -23,6 +23,7 @@ Commands:
   spawn <name> -f <file>  Spawn with task from file
   list                    List all minions
   status <name>           Get minion status and output
+  logs <name> [--lines N] Get last N lines of logs (default 50)
   watch <name>            Stream live logs from a minion
   collect <name>          Collect minion output
   kill <name>             Terminate a minion
@@ -160,6 +161,19 @@ async function main() {
                     console.log('\n--- Output ---');
                     console.log(status.output);
                 }
+                break;
+            }
+
+            case 'logs': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive logs <name>');
+                    process.exit(1);
+                }
+
+                const lines = parseInt(parsed.lines) || 50;
+                const logs = hive.logs(name, lines);
+                console.log(logs);
                 break;
             }
 

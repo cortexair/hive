@@ -434,6 +434,82 @@ describe('Hive.status', () => {
     });
 });
 
+// ─── Logs ────────────────────────────────────────────────────────────
+
+describe('Hive.logs', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.logs('ghost'), 'not found');
+    });
+
+    it('throws when minion has no container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Write fixture manually without containerId
+        const minionDir = path.join(hive.minionsDir, 'no-container');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-container',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            task: 'Test task',
+            status: 'pending',
+            containerId: null
+        }, null, 2));
+
+        assert.throws(() => hive.logs('no-container'), 'no container');
+    });
+
+    it('returns docker logs output', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('logs --tail')) return 'line 1\nline 2\nline 3\n';
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'log-test', { containerId: 'sha256:logid' });
+
+        const logs = hive.logs('log-test');
+        assert.equal(logs, 'line 1\nline 2\nline 3\n');
+    });
+
+    it('uses default lines count of 50', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'default-lines', { containerId: 'sha256:def' });
+
+        hive.logs('default-lines');
+        const logsCall = hive._dockerCalls.find(c => c.includes('logs --tail'));
+        assert.includes(logsCall, '--tail 50');
+    });
+
+    it('uses custom lines count when provided', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'custom-lines', { containerId: 'sha256:cust' });
+
+        hive.logs('custom-lines', 100);
+        const logsCall = hive._dockerCalls.find(c => c.includes('logs --tail'));
+        assert.includes(logsCall, '--tail 100');
+    });
+
+    it('throws when container is removed', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('logs')) throw new Error('no such container');
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'removed', { containerId: 'sha256:gone' });
+
+        assert.throws(() => hive.logs('removed'), 'container may be removed');
+    });
+});
+
 // ─── Collect ─────────────────────────────────────────────────────────
 
 describe('Hive.collect', () => {

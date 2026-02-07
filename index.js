@@ -203,6 +203,29 @@ class Hive {
     }
 
     /**
+     * Get logs from a minion (last N lines)
+     */
+    logs(name, lines = 50) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+        
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        try {
+            return this._docker(`logs --tail ${lines} hive-${name}`);
+        } catch (e) {
+            throw new Error(`Failed to get logs: container may be removed`);
+        }
+    }
+
+    /**
      * Kill a minion
      */
     kill(name) {
