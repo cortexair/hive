@@ -16,6 +16,7 @@ class Hive {
         this.hiveDir = options.hiveDir || HIVE_DIR;
         this.minionsDir = path.join(this.hiveDir, 'minions');
         this.templatesDir = path.join(this.hiveDir, 'templates');
+        this.networkDir = path.join(this.hiveDir, 'network');
         this.useSudo = options.useSudo !== false; // Default to sudo for Docker
         this._ensureDirs();
     }
@@ -24,6 +25,7 @@ class Hive {
         if (!fs.existsSync(this.hiveDir)) fs.mkdirSync(this.hiveDir, { recursive: true });
         if (!fs.existsSync(this.minionsDir)) fs.mkdirSync(this.minionsDir, { recursive: true });
         if (!fs.existsSync(this.templatesDir)) fs.mkdirSync(this.templatesDir, { recursive: true });
+        if (!fs.existsSync(this.networkDir)) fs.mkdirSync(this.networkDir, { recursive: true });
     }
 
     _docker(cmd) {
@@ -565,6 +567,96 @@ class Hive {
         }
         fs.rmSync(filePath);
         return { name, deleted: true };
+    }
+
+    // ─── Network: Inter-Minion Messaging ─────────────────────────────
+
+    _minionInbox(name) {
+        const dir = path.join(this.networkDir, name);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        return dir;
+    }
+
+    /**
+     * Send a message from one minion to another
+     */
+    send(from, to, body) {
+        // Verify both minions exist
+        if (!fs.existsSync(path.join(this.minionsDir, from))) {
+            throw new Error(`Sender minion '${from}' not found`);
+        }
+        if (!fs.existsSync(path.join(this.minionsDir, to))) {
+            throw new Error(`Recipient minion '${to}' not found`);
+        }
+
+        const inbox = this._minionInbox(to);
+        // Use high-resolution time + random suffix to ensure unique IDs even in tight loops
+        const hrtime = process.hrtime.bigint();
+        const rand = Math.random().toString(36).substring(2, 6);
+        const id = `${hrtime}-${from}-${rand}`;
+        const msg = {
+            id,
+            from,
+            to,
+            body,
+            timestamp: new Date().toISOString()
+        };
+        fs.writeFileSync(path.join(inbox, `${id}.json`), JSON.stringify(msg, null, 2));
+        return msg;
+    }
+
+    /**
+     * Read a minion's inbox messages
+     */
+    inbox(name) {
+        if (!fs.existsSync(path.join(this.minionsDir, name))) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const inboxDir = path.join(this.networkDir, name);
+        if (!fs.existsSync(inboxDir)) return [];
+
+        return fs.readdirSync(inboxDir)
+            .filter(f => f.endsWith('.json'))
+            .sort()
+            .map(f => JSON.parse(fs.readFileSync(path.join(inboxDir, f), 'utf8')));
+    }
+
+    /**
+     * Broadcast a message from one minion to all others
+     */
+    broadcast(from, body) {
+        if (!fs.existsSync(path.join(this.minionsDir, from))) {
+            throw new Error(`Sender minion '${from}' not found`);
+        }
+
+        const minions = this.list();
+        const sent = [];
+        for (const m of minions) {
+            if (m.name !== from) {
+                const msg = this.send(from, m.name, body);
+                sent.push(msg);
+            }
+        }
+        return sent;
+    }
+
+    /**
+     * Clear a minion's inbox
+     */
+    clearInbox(name) {
+        if (!fs.existsSync(path.join(this.minionsDir, name))) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const inboxDir = path.join(this.networkDir, name);
+        if (!fs.existsSync(inboxDir)) return { name, cleared: 0 };
+
+        const files = fs.readdirSync(inboxDir).filter(f => f.endsWith('.json'));
+        for (const f of files) {
+            fs.rmSync(path.join(inboxDir, f));
+        }
+        return { name, cleared: files.length };
     }
 }
 

@@ -39,6 +39,10 @@ Commands:
   kill <name>                  Terminate a minion
   cleanup                      Remove completed minions
   build                        Build the minion Docker image
+  network send <from> <to> <msg>  Send a message between minions
+  network inbox <name>           Read a minion's inbox
+  network broadcast <from> <msg> Broadcast to all minions
+  network clear <name>           Clear a minion's inbox
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -458,6 +462,83 @@ async function main() {
                     }
                     process.exit(code || 0);
                 });
+                break;
+            }
+
+            case 'network': {
+                const subcommand = parsed._[0];
+
+                switch (subcommand) {
+                    case 'send': {
+                        const from = parsed._[1];
+                        const to = parsed._[2];
+                        const body = parsed._[3];
+                        if (!from || !to || !body) {
+                            console.error('❌ Usage: hive network send <from> <to> <message>');
+                            process.exit(1);
+                        }
+                        const msg = hive.send(from, to, body);
+                        console.log(`📨 Message sent: ${from} → ${to}`);
+                        console.log(`   ID: ${msg.id}`);
+                        break;
+                    }
+
+                    case 'inbox': {
+                        const name = parsed._[1];
+                        if (!name) {
+                            console.error('❌ Name required: hive network inbox <name>');
+                            process.exit(1);
+                        }
+
+                        const messages = hive.inbox(name);
+
+                        if (parsed.json) {
+                            console.log(JSON.stringify(messages, null, 2));
+                            break;
+                        }
+
+                        if (messages.length === 0) {
+                            console.log(`📭 No messages for ${name}`);
+                            break;
+                        }
+
+                        console.log(`📬 Inbox for ${name}: ${messages.length} message(s)\n`);
+                        for (const msg of messages) {
+                            console.log(`  From: ${msg.from}  (${msg.timestamp})`);
+                            console.log(`  ${msg.body}`);
+                            console.log('');
+                        }
+                        break;
+                    }
+
+                    case 'broadcast': {
+                        const from = parsed._[1];
+                        const body = parsed._[2];
+                        if (!from || !body) {
+                            console.error('❌ Usage: hive network broadcast <from> <message>');
+                            process.exit(1);
+                        }
+                        const sent = hive.broadcast(from, body);
+                        console.log(`📢 Broadcast from ${from}: ${sent.length} recipient(s)`);
+                        break;
+                    }
+
+                    case 'clear': {
+                        const name = parsed._[1];
+                        if (!name) {
+                            console.error('❌ Name required: hive network clear <name>');
+                            process.exit(1);
+                        }
+                        const result = hive.clearInbox(name);
+                        console.log(`🧹 Cleared ${result.cleared} message(s) from ${name}'s inbox`);
+                        break;
+                    }
+
+                    default:
+                        console.error(`❌ Unknown network command: ${subcommand}`);
+                        console.error('Usage: hive network <send|inbox|broadcast|clear>');
+                        process.exit(1);
+                }
                 break;
             }
 

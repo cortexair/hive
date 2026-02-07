@@ -1285,6 +1285,207 @@ describe('Hive.health', () => {
     });
 });
 
+// ─── Network: Inter-Minion Messaging ─────────────────────────────────
+
+describe('Hive.send', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('sends a message between two minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        const msg = hive.send('alice', 'bob', 'hello bob');
+        assert.equal(msg.from, 'alice');
+        assert.equal(msg.to, 'bob');
+        assert.equal(msg.body, 'hello bob');
+        assert.ok(msg.id);
+        assert.ok(msg.timestamp);
+    });
+
+    it('writes message file to recipient inbox', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        hive.send('alice', 'bob', 'test message');
+        const inboxDir = path.join(hive.networkDir, 'bob');
+        const files = fs.readdirSync(inboxDir);
+        assert.equal(files.length, 1);
+        assert.ok(files[0].endsWith('.json'));
+    });
+
+    it('throws when sender does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        assert.throws(() => hive.send('ghost', 'bob', 'hey'), "Sender minion 'ghost' not found");
+    });
+
+    it('throws when recipient does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+
+        assert.throws(() => hive.send('alice', 'ghost', 'hey'), "Recipient minion 'ghost' not found");
+    });
+
+    it('supports multiple messages to same recipient', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        hive.send('alice', 'bob', 'msg 1');
+        hive.send('alice', 'bob', 'msg 2');
+
+        const inboxDir = path.join(hive.networkDir, 'bob');
+        const files = fs.readdirSync(inboxDir);
+        assert.equal(files.length, 2);
+    });
+});
+
+describe('Hive.inbox', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns empty array when no messages', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+
+        const messages = hive.inbox('alice');
+        assert.deepEqual(messages, []);
+    });
+
+    it('returns messages sorted by time', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+        writeMinionFixture(hive.minionsDir, 'charlie');
+
+        hive.send('bob', 'alice', 'first');
+        hive.send('charlie', 'alice', 'second');
+
+        const messages = hive.inbox('alice');
+        assert.equal(messages.length, 2);
+        assert.equal(messages[0].body, 'first');
+        assert.equal(messages[1].body, 'second');
+    });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+
+        assert.throws(() => hive.inbox('ghost'), "Minion 'ghost' not found");
+    });
+
+    it('returns parsed message objects', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        hive.send('bob', 'alice', 'hello');
+        const messages = hive.inbox('alice');
+        assert.equal(messages[0].from, 'bob');
+        assert.equal(messages[0].to, 'alice');
+        assert.equal(messages[0].body, 'hello');
+    });
+});
+
+describe('Hive.broadcast', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('sends to all other minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+        writeMinionFixture(hive.minionsDir, 'charlie');
+
+        const sent = hive.broadcast('alice', 'hello everyone');
+        assert.equal(sent.length, 2);
+        assert.equal(sent[0].to, 'bob');
+        assert.equal(sent[1].to, 'charlie');
+    });
+
+    it('does not send to self', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        hive.broadcast('alice', 'hello');
+        const own = hive.inbox('alice');
+        assert.equal(own.length, 0);
+    });
+
+    it('throws when sender does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+
+        assert.throws(() => hive.broadcast('ghost', 'hey'), /Sender minion 'ghost' not found/);
+    });
+
+    it('returns empty array when no other minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+
+        const sent = hive.broadcast('alice', 'hello?');
+        assert.equal(sent.length, 0);
+    });
+});
+
+describe('Hive.clearInbox', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('clears all messages from inbox', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+        writeMinionFixture(hive.minionsDir, 'bob');
+
+        hive.send('bob', 'alice', 'msg 1');
+        hive.send('bob', 'alice', 'msg 2');
+
+        const result = hive.clearInbox('alice');
+        assert.equal(result.cleared, 2);
+
+        const messages = hive.inbox('alice');
+        assert.equal(messages.length, 0);
+    });
+
+    it('returns zero when inbox is empty', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+
+        const result = hive.clearInbox('alice');
+        assert.equal(result.cleared, 0);
+    });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+
+        assert.throws(() => hive.clearInbox('ghost'), /Minion 'ghost' not found/);
+    });
+
+    it('returns name in result', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'alice');
+
+        const result = hive.clearInbox('alice');
+        assert.equal(result.name, 'alice');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

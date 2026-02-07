@@ -60,8 +60,15 @@ const assert = {
         if (!threw) {
             throw new AssertionError(`Expected function to throw`);
         }
-        if (expectedMsg && !error.message.includes(expectedMsg)) {
-            throw new AssertionError(`Expected error containing "${expectedMsg}", got "${error.message}"`);
+        if (expectedMsg) {
+            // Support both string and regex patterns
+            if (expectedMsg instanceof RegExp) {
+                if (!expectedMsg.test(error.message)) {
+                    throw new AssertionError(`Expected error matching ${expectedMsg}, got "${error.message}"`);
+                }
+            } else if (!error.message.includes(expectedMsg)) {
+                throw new AssertionError(`Expected error containing "${expectedMsg}", got "${error.message}"`);
+            }
         }
         return error;
     },

@@ -282,6 +282,46 @@ describe('CLI help includes logs', () => {
     });
 });
 
+describe('CLI network validation', () => {
+    it('errors on unknown network subcommand', () => {
+        const { output, exitCode } = runCli('network foobar');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Unknown network command');
+    });
+
+    it('errors when send args are missing', () => {
+        const { output, exitCode } = runCli('network send alice');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Usage');
+    });
+
+    it('errors when inbox name is missing', () => {
+        const { output, exitCode } = runCli('network inbox');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
+    it('errors when broadcast args are missing', () => {
+        const { output, exitCode } = runCli('network broadcast alice');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Usage');
+    });
+
+    it('errors when clear name is missing', () => {
+        const { output, exitCode } = runCli('network clear');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+});
+
+describe('CLI help includes network', () => {
+    it('shows network command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'network');
+    });
+});
+
 describe('CLI health command', () => {
     it('shows health command in help', () => {
         const { output, exitCode } = runCli('--help');
