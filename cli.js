@@ -29,6 +29,7 @@ Commands:
   version                      Show Hive version
   stats <name>                 Get resource usage (CPU, memory, I/O)
   logs <name> [--lines N]      Get last N lines of logs (default 50)
+  wait <name> [--timeout S]    Wait for minion to complete (default: 300s)
   watch <name>                 Stream live logs from a minion
   exec <name> [command]        Run a command in a minion's container (default: /bin/bash)
   collect <name>               Collect minion output
@@ -265,6 +266,38 @@ async function main() {
                 const lines = parseInt(parsed.lines) || 50;
                 const logs = hive.logs(name, lines);
                 console.log(logs);
+                break;
+            }
+
+            case 'wait': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive wait <name>');
+                    process.exit(1);
+                }
+
+                const timeoutSec = parseInt(parsed.timeout) || 300;
+                console.log(`⏳ Waiting for minion: ${name} (timeout: ${timeoutSec}s)`);
+
+                const result = await hive.wait(name, { timeoutMs: timeoutSec * 1000 });
+                
+                if (result.status === 'COMPLETE') {
+                    console.log(`✅ Minion completed`);
+                    if (result.output) {
+                        console.log('\n--- Output ---');
+                        console.log(result.output);
+                    }
+                } else if (result.status === 'FAILED') {
+                    console.log(`❌ Minion failed`);
+                    if (result.output) {
+                        console.log('\n--- Output ---');
+                        console.log(result.output);
+                    }
+                    process.exit(1);
+                } else if (result.status === 'TIMEOUT') {
+                    console.log(`⏱️  Timeout waiting for minion`);
+                    process.exit(1);
+                }
                 break;
             }
 

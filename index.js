@@ -205,6 +205,41 @@ class Hive {
     }
 
     /**
+     * Wait for a minion to complete
+     * @param {string} name - Minion name
+     * @param {Object} options - Wait options
+     * @param {number} options.timeoutMs - Timeout in milliseconds (default: 300000)
+     * @param {number} options.pollMs - Poll interval in milliseconds (default: 2000)
+     * @returns {Promise<{status: string, output?: string}>}
+     */
+    async wait(name, options = {}) {
+        const timeoutMs = options.timeoutMs || 300000;
+        const pollMs = options.pollMs || 2000;
+        const startTime = Date.now();
+
+        while (true) {
+            const status = this.status(name);
+            const taskStatus = status.taskStatus;
+
+            if (taskStatus === 'COMPLETE') {
+                return { status: 'COMPLETE', output: status.output };
+            }
+
+            if (taskStatus === 'FAILED') {
+                return { status: 'FAILED', output: status.output };
+            }
+
+            // Check timeout
+            if (Date.now() - startTime > timeoutMs) {
+                return { status: 'TIMEOUT', output: status.output };
+            }
+
+            // Wait before next poll
+            await new Promise(resolve => setTimeout(resolve, pollMs));
+        }
+    }
+
+    /**
      * Get logs from a minion (last N lines)
      */
     logs(name, lines = 50) {

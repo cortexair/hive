@@ -543,6 +543,70 @@ describe('Hive.collect', () => {
     });
 });
 
+// ─── Wait ────────────────────────────────────────────────────────────
+
+describe('Hive.wait', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('resolves immediately when minion is COMPLETE', async () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'done', {
+            taskStatus: 'COMPLETE',
+            output: 'Output data',
+            containerId: 'sha256:done'
+        });
+
+        const result = await hive.wait('done', { pollMs: 10 });
+        assert.equal(result.status, 'COMPLETE');
+        assert.equal(result.output, 'Output data');
+    });
+
+    it('resolves immediately when minion is FAILED', async () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'fail', {
+            taskStatus: 'FAILED',
+            output: 'Error data',
+            containerId: 'sha256:fail'
+        });
+
+        const result = await hive.wait('fail', { pollMs: 10 });
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.output, 'Error data');
+    });
+
+    it('times out when minion stays WORKING', async () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'slow', {
+            taskStatus: 'WORKING',
+            containerId: 'sha256:slow'
+        });
+
+        const result = await hive.wait('slow', { timeoutMs: 50, pollMs: 10 });
+        assert.equal(result.status, 'TIMEOUT');
+    });
+
+    it('polls until status changes to COMPLETE', async () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'eventual', {
+            taskStatus: 'WORKING',
+            containerId: 'sha256:eventual'
+        });
+
+        // Simulate status change after a short delay
+        setTimeout(() => {
+            const statusPath = path.join(hive.minionsDir, 'eventual', 'STATUS');
+            fs.writeFileSync(statusPath, 'COMPLETE');
+        }, 30);
+
+        const result = await hive.wait('eventual', { timeoutMs: 500, pollMs: 10 });
+        assert.equal(result.status, 'COMPLETE');
+    });
+});
+
 // ─── Kill ────────────────────────────────────────────────────────────
 
 describe('Hive.kill', () => {
