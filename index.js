@@ -658,6 +658,127 @@ class Hive {
         }
         return { name, cleared: files.length };
     }
+
+    /**
+     * Export a minion's workspace to a tarball
+     */
+    export(name, options = {}) {
+        const minionDir = path.join(this.minionsDir, name);
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const outputPath = options.output || path.join(process.cwd(), `${name}-${timestamp}.tar.gz`);
+
+        // Build tar command
+        let tarCmd = `tar -czf "${outputPath}" -C "${this.minionsDir}" "${name}"`;
+        
+        // Include logs if requested
+        if (options.includeLogs) {
+            const containerName = `hive-${name}`;
+            try {
+                const logs = this._docker(`logs ${containerName} 2>&1`);
+                const logsPath = path.join(minionDir, 'container.log');
+                fs.writeFileSync(logsPath, logs);
+            } catch {
+                // Container may not exist, skip logs
+            }
+        }
+
+        // Include inbox if requested
+        if (options.includeInbox) {
+            const inboxDir = path.join(this.networkDir, name);
+            if (fs.existsSync(inboxDir)) {
+                const inboxCopy = path.join(minionDir, 'inbox');
+                if (!fs.existsSync(inboxCopy)) {
+                    fs.mkdirSync(inboxCopy, { recursive: true });
+                }
+                const messages = fs.readdirSync(inboxDir).filter(f => f.endsWith('.json'));
+                for (const msg of messages) {
+                    fs.copyFileSync(path.join(inboxDir, msg), path.join(inboxCopy, msg));
+                }
+            }
+        }
+
+        execSync(tarCmd);
+
+        const stat = fs.statSync(outputPath);
+        return {
+            name,
+            path: outputPath,
+            size: stat.size,
+            sizeHuman: this._humanSize(stat.size)
+        };
+    }
+
+    /**
+     * Helper: human-readable file size
+     */
+    _humanSize(bytes) {
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (bytes >= 1024 && i < units.length - 1) {
+            bytes /= 1024;
+            i++;
+        }
+        return `${bytes.toFixed(1)}${units[i]}`;
+    }
+
+    /**
+     * Import a minion from a tarball
+     */
+    import(tarPath, options = {}) {
+        if (!fs.existsSync(tarPath)) {
+            throw new Error(`Archive not found: ${tarPath}`);
+        }
+
+        // Extract to temp location to read the name
+        const tempDir = path.join(this.hiveDir, '.import-temp');
+        if (fs.existsSync(tempDir)) {
+            fs.rmSync(tempDir, { recursive: true });
+        }
+        fs.mkdirSync(tempDir, { recursive: true });
+
+        execSync(`tar -xzf "${tarPath}" -C "${tempDir}"`);
+
+        // Find the minion directory name
+        const extracted = fs.readdirSync(tempDir);
+        if (extracted.length !== 1) {
+            fs.rmSync(tempDir, { recursive: true });
+            throw new Error('Invalid archive: expected single minion directory');
+        }
+
+        const name = options.name || extracted[0];
+        const sourcePath = path.join(tempDir, extracted[0]);
+        const destPath = path.join(this.minionsDir, name);
+
+        if (fs.existsSync(destPath) && !options.overwrite) {
+            fs.rmSync(tempDir, { recursive: true });
+            throw new Error(`Minion '${name}' already exists. Use --overwrite to replace.`);
+        }
+
+        // Move to minions directory
+        if (fs.existsSync(destPath)) {
+            fs.rmSync(destPath, { recursive: true });
+        }
+        fs.renameSync(sourcePath, destPath);
+        fs.rmSync(tempDir, { recursive: true });
+
+        // Update meta with import timestamp
+        const metaPath = path.join(destPath, 'meta.json');
+        if (fs.existsSync(metaPath)) {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            meta.importedAt = new Date().toISOString();
+            if (options.name && options.name !== extracted[0]) {
+                meta.originalName = extracted[0];
+                meta.name = options.name;
+            }
+            fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+        }
+
+        return { name, path: destPath, imported: true };
+    }
 }
 
 module.exports = { Hive, HIVE_DIR, IMAGE_NAME };

@@ -43,6 +43,8 @@ Commands:
   network inbox <name>           Read a minion's inbox
   network broadcast <from> <msg> Broadcast to all minions
   network clear <name>           Clear a minion's inbox
+  export <name> [--output path]  Export minion workspace to tarball
+  import <tarball> [--name n]    Import minion from tarball
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -51,6 +53,9 @@ Commands:
 Options:
   --keep-alive           Keep container running after task
   --no-sudo              Don't use sudo for Docker commands
+  --logs                 Include container logs in export
+  --inbox                Include inbox messages in export
+  --overwrite            Overwrite existing minion on import
 
 Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
@@ -58,8 +63,8 @@ Examples:
   hive spawn worker-2 -t code-review
   hive template save code-review -f review-task.md
   echo "Review the PR" | hive template save quick-review
-  hive template list
-  hive template show code-review
+  hive export worker-1 --logs --inbox
+  hive import worker-1-backup.tar.gz --name worker-restored
   hive list
   hive status worker-1
   hive kill worker-1
@@ -539,6 +544,45 @@ async function main() {
                         console.error('Usage: hive network <send|inbox|broadcast|clear>');
                         process.exit(1);
                 }
+                break;
+            }
+
+            case 'export': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive export <name>');
+                    process.exit(1);
+                }
+
+                const options = {
+                    output: parsed.output || parsed.o,
+                    includeLogs: parsed.logs || parsed['include-logs'],
+                    includeInbox: parsed.inbox || parsed['include-inbox']
+                };
+
+                console.log(`📦 Exporting minion: ${name}`);
+                const result = hive.export(name, options);
+                console.log(`✅ Exported to: ${result.path}`);
+                console.log(`   Size: ${result.sizeHuman}`);
+                break;
+            }
+
+            case 'import': {
+                const tarPath = parsed._[0];
+                if (!tarPath) {
+                    console.error('❌ Tarball required: hive import <path.tar.gz>');
+                    process.exit(1);
+                }
+
+                const options = {
+                    name: parsed.name || parsed.n,
+                    overwrite: parsed.overwrite || parsed.force
+                };
+
+                console.log(`📥 Importing from: ${tarPath}`);
+                const result = hive.import(tarPath, options);
+                console.log(`✅ Imported minion: ${result.name}`);
+                console.log(`   Path: ${result.path}`);
                 break;
             }
 
