@@ -22,8 +22,9 @@ Usage: hive <command> [options]
 Commands:
   spawn <name> <task>     Spawn a new minion with a task
   spawn <name> -f <file>  Spawn with task from file
-  list                    List all minions
-  status <name>           Get minion status and output
+  list [--json]           List all minions
+  status <name> [--json]  Get minion status and output
+  version                 Show Hive version
   stats <name>            Get resource usage (CPU, memory, I/O)
   logs <name> [--lines N] Get last N lines of logs (default 50)
   watch <name>            Stream live logs from a minion
@@ -87,6 +88,16 @@ async function main() {
 
     try {
         switch (command) {
+            case 'version': {
+                const pkg = require('./package.json');
+                if (parsed.json) {
+                    console.log(JSON.stringify({ name: pkg.name, version: pkg.version }));
+                } else {
+                    console.log(`${pkg.name} v${pkg.version}`);
+                }
+                break;
+            }
+
             case 'build': {
                 const projectDir = path.dirname(__filename);
                 hive.buildImage(projectDir);
@@ -130,6 +141,12 @@ async function main() {
 
             case 'list': {
                 const minions = hive.list();
+                
+                if (parsed.json) {
+                    console.log(JSON.stringify(minions, null, 2));
+                    break;
+                }
+                
                 if (minions.length === 0) {
                     console.log('No minions active');
                     return;
@@ -158,6 +175,12 @@ async function main() {
                 }
 
                 const status = hive.status(name);
+                
+                if (parsed.json) {
+                    console.log(JSON.stringify(status, null, 2));
+                    break;
+                }
+                
                 console.log(`🐝 Minion: ${name}\n`);
                 console.log(`Status: ${status.taskStatus || status.status}`);
                 console.log(`Created: ${status.createdAt}`);
