@@ -1071,6 +1071,156 @@ describe('Hive.templateDelete', () => {
     });
 });
 
+// ─── Health ──────────────────────────────────────────────────────────
+
+describe('Hive.health', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('reports docker not running when _docker throws', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) throw new Error('Cannot connect to Docker daemon');
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.docker.running, false);
+        assert.equal(h.image.exists, false);
+        assert.equal(h.minions.total, 0);
+    });
+
+    it('returns early when docker is not running', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                throw new Error('Cannot connect to Docker daemon');
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.docker.running, false);
+        // Should not attempt image or disk checks
+        assert.equal(h.image.exists, false);
+        assert.notOk(h.disk.usage);
+    });
+
+    it('reports docker running and image exists with age', () => {
+        tmp = tmpDir();
+        const imageDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000); // 2 days ago
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect')) return JSON.stringify(imageDate.toISOString()) + '\n';
+                if (cmd.includes('system df')) return JSON.stringify({ Type: 'Images', TotalCount: '5', Reclaimable: '1.2GB' }) + '\n';
+                if (cmd.includes('inspect -f')) return "'running'\n";
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.docker.running, true);
+        assert.equal(h.image.exists, true);
+        assert.includes(h.image.age, '2d');
+        assert.ok(h.image.created);
+    });
+
+    it('reports image not found when image inspect throws', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect')) throw new Error('No such image');
+                if (cmd.includes('system df')) return JSON.stringify({ Type: 'Images', TotalCount: '0', Reclaimable: '0B' }) + '\n';
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.docker.running, true);
+        assert.equal(h.image.exists, false);
+        assert.notOk(h.image.age);
+    });
+
+    it('counts minions by status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect') && cmd.includes('Created')) throw new Error('No such image');
+                if (cmd.includes('system df')) return JSON.stringify({ Type: 'Images', TotalCount: '0', Reclaimable: '0B' }) + '\n';
+                if (cmd.includes('inspect -f')) return "'running'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'w1', { status: 'running', containerId: 'sha256:w1' });
+        writeMinionFixture(hive.minionsDir, 'w2', { status: 'running', containerId: 'sha256:w2' });
+        writeMinionFixture(hive.minionsDir, 'w3', { status: 'killed', extraMeta: { containerId: null } });
+
+        const h = hive.health();
+        assert.equal(h.minions.total, 3);
+        assert.equal(h.minions.running, 2);
+        assert.equal(h.minions.byStatus['running'], 2);
+    });
+
+    it('reports disk usage from docker system df', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect')) throw new Error('No such image');
+                if (cmd.includes('system df')) {
+                    return [
+                        JSON.stringify({ Type: 'Images', TotalCount: '5', Reclaimable: '1.2GB' }),
+                        JSON.stringify({ Type: 'Containers', TotalCount: '3', Reclaimable: '500MB' })
+                    ].join('\n') + '\n';
+                }
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.ok(h.disk.usage);
+        assert.equal(h.disk.usage.length, 2);
+        assert.equal(h.disk.usage[0].Type, 'Images');
+        assert.equal(h.disk.usage[1].Type, 'Containers');
+    });
+
+    it('handles disk info unavailable gracefully', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect')) throw new Error('No such image');
+                if (cmd.includes('system df')) throw new Error('permission denied');
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.docker.running, true);
+        assert.notOk(h.disk.usage);
+    });
+
+    it('reports image age in hours when less than a day old', () => {
+        tmp = tmpDir();
+        const imageDate = new Date(Date.now() - 5 * 60 * 60 * 1000); // 5 hours ago
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('info')) return '24.0.0\n';
+                if (cmd.includes('image inspect')) return JSON.stringify(imageDate.toISOString()) + '\n';
+                if (cmd.includes('system df')) return JSON.stringify({ Type: 'Images', TotalCount: '1', Reclaimable: '0B' }) + '\n';
+                return '';
+            }
+        });
+
+        const h = hive.health();
+        assert.equal(h.image.exists, true);
+        assert.equal(h.image.age, '5h');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

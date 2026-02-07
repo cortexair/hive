@@ -281,3 +281,19 @@ describe('CLI help includes logs', () => {
         assert.includes(output, 'logs');
     });
 });
+
+describe('CLI health command', () => {
+    it('shows health command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'health');
+    });
+
+    it('runs health command without crashing', () => {
+        tmp = tmpDir();
+        // Health command should always succeed (even if Docker is down, it reports status)
+        const { output, exitCode } = runCli('health --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'Health Check');
+    });
+});

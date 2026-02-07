@@ -3,7 +3,7 @@
  * Hive CLI - Cortex's Minion Control
  */
 
-const { Hive } = require('./index.js');
+const { Hive, IMAGE_NAME } = require('./index.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -25,6 +25,7 @@ Commands:
   spawn <name> -t <template>   Spawn with a saved template
   list [--json]                List all minions
   status <name> [--json]       Get minion status and output
+  health                       Check system health (Docker, image, minions, disk)
   version                      Show Hive version
   stats <name>                 Get resource usage (CPU, memory, I/O)
   logs <name> [--lines N]      Get last N lines of logs (default 50)
@@ -108,6 +109,52 @@ async function main() {
                 } else {
                     console.log(`${pkg.name} v${pkg.version}`);
                 }
+                break;
+            }
+
+            case 'health': {
+                const h = hive.health();
+
+                console.log('\n🐝 Hive Health Check\n');
+                console.log('─'.repeat(40));
+
+                // Docker daemon
+                if (h.docker.running) {
+                    console.log('  Docker:    ✅ Running');
+                } else {
+                    console.log('  Docker:    ❌ Not running');
+                    console.log('\n  Docker daemon is not available.');
+                    console.log('  Start Docker and try again.');
+                    break;
+                }
+
+                // Hive image
+                if (h.image.exists) {
+                    console.log(`  Image:     ✅ ${IMAGE_NAME} (${h.image.age} old)`);
+                } else {
+                    console.log(`  Image:     ⚠️  Not built (run: hive build)`);
+                }
+
+                // Minions
+                console.log(`  Minions:   ${h.minions.running} running / ${h.minions.total} total`);
+                if (Object.keys(h.minions.byStatus).length > 0) {
+                    for (const [status, count] of Object.entries(h.minions.byStatus)) {
+                        console.log(`             - ${status}: ${count}`);
+                    }
+                }
+
+                // Disk usage
+                if (h.disk.usage) {
+                    console.log('  Disk:');
+                    for (const entry of h.disk.usage) {
+                        console.log(`             ${entry.Type}: ${entry.TotalCount || entry.Size || 'N/A'} (${entry.Reclaimable || '0B'} reclaimable)`);
+                    }
+                } else {
+                    console.log('  Disk:      ⚠️  Unable to retrieve');
+                }
+
+                console.log('─'.repeat(40));
+                console.log('');
                 break;
             }
 

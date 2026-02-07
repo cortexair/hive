@@ -461,6 +461,66 @@ class Hive {
     }
 
     /**
+     * Run a health check on the hive system
+     */
+    health() {
+        const result = {
+            docker: { running: false },
+            image: { exists: false, age: null, created: null },
+            minions: { running: 0, total: 0, byStatus: {} },
+            disk: { usage: null, total: null, available: null }
+        };
+
+        // 1. Check Docker daemon
+        try {
+            this._docker('info --format "{{.ServerVersion}}"');
+            result.docker.running = true;
+        } catch {
+            return result;
+        }
+
+        // 2. Check Hive image
+        try {
+            const inspectJson = this._docker(`image inspect ${IMAGE_NAME} --format "{{json .Created}}"`);
+            const created = new Date(JSON.parse(inspectJson.trim()));
+            result.image.exists = true;
+            result.image.created = created.toISOString();
+            const ageMs = Date.now() - created.getTime();
+            const days = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            result.image.age = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+        } catch {
+            // Image doesn't exist
+        }
+
+        // 3. Count minions
+        try {
+            const minions = this.list();
+            result.minions.total = minions.length;
+            for (const m of minions) {
+                const raw = m.containerStatus || m.status || 'unknown';
+                const s = raw.replace(/^'+|'+$/g, '');
+                result.minions.byStatus[s] = (result.minions.byStatus[s] || 0) + 1;
+                if (s === 'running') result.minions.running++;
+            }
+        } catch {
+            // No minions dir or other issue
+        }
+
+        // 4. Docker disk usage
+        try {
+            const dfOutput = this._docker('system df --format "{{json .}}"');
+            const lines = dfOutput.trim().split('\n');
+            const parsed = lines.map(l => JSON.parse(l));
+            result.disk.usage = parsed;
+        } catch {
+            // Disk info unavailable
+        }
+
+        return result;
+    }
+
+    /**
      * Delete a template
      */
     templateDelete(name) {
