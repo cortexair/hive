@@ -9,8 +9,9 @@ const path = require('path');
 
 const args = process.argv.slice(2);
 const command = args[0];
+const noSudo = args.includes('--no-sudo');
 
-const hive = new Hive();
+const hive = new Hive({ useSudo: !noSudo });
 
 function usage() {
     console.log(`
@@ -25,6 +26,7 @@ Commands:
   status <name>           Get minion status and output
   logs <name> [--lines N] Get last N lines of logs (default 50)
   watch <name>            Stream live logs from a minion
+  exec <name> [command]   Run a command in a minion's container (default: /bin/bash)
   collect <name>          Collect minion output
   kill <name>             Terminate a minion
   cleanup                 Remove completed minions
@@ -210,6 +212,32 @@ async function main() {
                 } else {
                     console.log(`Cleaned: ${cleaned.join(', ')}`);
                 }
+                break;
+            }
+
+            case 'exec': {
+                // Parse args manually to preserve command structure
+                const execArgs = args.slice(1).filter(a => a !== '--no-sudo');
+                const name = execArgs[0];
+                if (!name) {
+                    console.error('❌ Name required: hive exec <name> [command]');
+                    process.exit(1);
+                }
+
+                const cmdArgs = execArgs.slice(1);
+                const command = cmdArgs.length > 0 ? cmdArgs : ['/bin/bash'];
+
+                // Verify minion exists
+                try {
+                    hive.status(name);
+                } catch (err) {
+                    console.error(`❌ ${err.message}`);
+                    process.exit(1);
+                }
+
+                console.log(`🐝 Executing in minion: ${name}`);
+                const exitCode = hive.exec(name, command);
+                process.exit(exitCode || 0);
                 break;
             }
 

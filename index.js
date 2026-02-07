@@ -4,7 +4,7 @@
  * Core library for spawning and managing AI agent minions in Docker containers.
  */
 
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -250,6 +250,32 @@ class Hive {
         fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
         return { name, status: 'killed' };
+    }
+
+    /**
+     * Execute a command inside a minion's container
+     */
+    exec(name, command = ['/bin/bash']) {
+        const minionDir = path.join(this.minionsDir, name);
+
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        const dockerCmd = this.useSudo ? 'sudo' : 'docker';
+        const dockerArgs = this.useSudo
+            ? ['docker', 'exec', '-it', `hive-${name}`, ...command]
+            : ['exec', '-it', `hive-${name}`, ...command];
+
+        const result = spawnSync(dockerCmd, dockerArgs, { stdio: 'inherit' });
+
+        return result.status;
     }
 
     /**
