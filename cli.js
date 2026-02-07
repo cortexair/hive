@@ -23,6 +23,7 @@ Commands:
   spawn <name> -f <file>  Spawn with task from file
   list                    List all minions
   status <name>           Get minion status and output
+  watch <name>            Stream live logs from a minion
   collect <name>          Collect minion output
   kill <name>             Terminate a minion
   cleanup                 Remove completed minions
@@ -195,6 +196,48 @@ async function main() {
                 } else {
                     console.log(`Cleaned: ${cleaned.join(', ')}`);
                 }
+                break;
+            }
+
+            case 'watch': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive watch <name>');
+                    process.exit(1);
+                }
+
+                // Verify minion exists
+                try {
+                    hive.status(name);
+                } catch (err) {
+                    console.error(`❌ ${err.message}`);
+                    process.exit(1);
+                }
+
+                console.log(`🔍 Watching minion: ${name}`);
+                console.log('   Press Ctrl+C to stop\n');
+                console.log('--- Live Logs ---\n');
+
+                const { spawn } = require('child_process');
+                const dockerCmd = hive.useSudo ? 'sudo' : 'docker';
+                const dockerArgs = hive.useSudo 
+                    ? ['docker', 'logs', '-f', `hive-${name}`]
+                    : ['logs', '-f', `hive-${name}`];
+
+                const proc = spawn(dockerCmd, dockerArgs, { stdio: 'inherit' });
+
+                process.on('SIGINT', () => {
+                    proc.kill();
+                    console.log('\n\n👋 Stopped watching');
+                    process.exit(0);
+                });
+
+                proc.on('exit', (code) => {
+                    if (code !== 0 && code !== null) {
+                        console.error(`\n❌ Container logs ended (code ${code})`);
+                    }
+                    process.exit(code || 0);
+                });
                 break;
             }
 

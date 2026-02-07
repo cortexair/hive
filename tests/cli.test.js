@@ -235,3 +235,26 @@ describe('CLI spawn with -f flag', () => {
         assert.ok(!output.includes('Task required'));
     });
 });
+
+describe('CLI watch validation', () => {
+    it('errors when name is missing', () => {
+        const { output, exitCode } = runCli('watch');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
+    it('errors when minion does not exist', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('watch nonexistent', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+});
+
+describe('CLI help includes watch', () => {
+    it('shows watch command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'watch');
+    });
+});
