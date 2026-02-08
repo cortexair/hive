@@ -271,6 +271,67 @@ class Hive {
     }
 
     /**
+     * Check all waiting minions and start those whose dependencies have completed.
+     * @param {Object} options - Options to pass to start() (claudeToken, keepAlive, etc.)
+     * @returns {Array<{name, dependsOn}>} - List of minions that were started
+     */
+    checkAndStartDependents(options = {}) {
+        const started = [];
+        const minions = this.list();
+
+        for (const m of minions) {
+            if (m.status !== 'waiting' || !m.dependsOn) continue;
+
+            // Check if dependency completed
+            const depStatusPath = path.join(this.minionsDir, m.dependsOn, 'STATUS');
+            if (!fs.existsSync(depStatusPath)) continue;
+
+            const depStatus = fs.readFileSync(depStatusPath, 'utf8').trim();
+            if (depStatus === 'COMPLETE') {
+                this.start(m.name, options);
+                started.push({ name: m.name, dependsOn: m.dependsOn });
+            }
+        }
+        return started;
+    }
+
+    /**
+     * Watch for dependency completions and auto-start waiting minions.
+     * Polls on an interval and calls checkAndStartDependents().
+     * @param {Object} options - Watch options
+     * @param {number} options.intervalMs - Poll interval in ms (default: 5000)
+     * @param {string} options.claudeToken - Claude API token to pass to started minions
+     * @param {boolean} options.keepAlive - Keep containers alive after task
+     * @param {Function} options.onStart - Callback called for each auto-started minion
+     * @returns {Promise<void>} - Resolves when stopped via SIGINT
+     */
+    async watchDeps(options = {}) {
+        const intervalMs = options.intervalMs || 5000;
+        const startOptions = { claudeToken: options.claudeToken, keepAlive: options.keepAlive };
+        let running = true;
+
+        const poll = () => {
+            if (!running) return;
+            const started = this.checkAndStartDependents(startOptions);
+            for (const s of started) {
+                if (options.onStart) options.onStart(s);
+            }
+        };
+
+        // Allow external stop
+        this._watchDepsStop = () => { running = false; };
+
+        // Initial check
+        poll();
+
+        // Polling loop
+        while (running) {
+            await new Promise(resolve => setTimeout(resolve, intervalMs));
+            poll();
+        }
+    }
+
+    /**
      * List all minions
      */
     list() {

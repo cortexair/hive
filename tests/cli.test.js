@@ -448,6 +448,14 @@ describe('CLI help includes start and --after', () => {
     });
 });
 
+describe('CLI help includes watch-deps', () => {
+    it('shows watch-deps command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'watch-deps');
+    });
+});
+
 describe('CLI ps alias', () => {
     it('ps is alias for list', () => {
         tmp = tmpDir();

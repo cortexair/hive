@@ -2470,6 +2470,158 @@ describe('Hive.aggregateStats', () => {
     });
 });
 
+// ─── checkAndStartDependents ─────────────────────────────────────────
+
+describe('Hive.checkAndStartDependents', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns empty array when no waiting minions exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'running-1', {
+            status: 'running',
+            containerId: 'sha256:r1'
+        });
+
+        const started = hive.checkAndStartDependents();
+        assert.deepEqual(started, []);
+    });
+
+    it('starts waiting minion when dependency has STATUS=COMPLETE', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Create dependency minion with COMPLETE status
+        writeMinionFixture(hive.minionsDir, 'step-1', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'First task'
+        });
+        // Create waiting minion that depends on step-1
+        hive.spawnWaiting('step-2', 'Second task', 'step-1');
+
+        const started = hive.checkAndStartDependents();
+        assert.equal(started.length, 1);
+        assert.equal(started[0].name, 'step-2');
+        assert.equal(started[0].dependsOn, 'step-1');
+
+        // Verify meta was updated to running
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'step-2', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'running');
+    });
+
+    it('does not start when dependency STATUS is WORKING', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', {
+            taskStatus: 'WORKING',
+            taskContent: 'Working task'
+        });
+        hive.spawnWaiting('waiter', 'Waiting task', 'dep');
+
+        const started = hive.checkAndStartDependents();
+        assert.deepEqual(started, []);
+
+        // Verify still waiting
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'waiter', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'waiting');
+    });
+
+    it('does not start when dependency has no STATUS file', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Create dep without STATUS file
+        writeMinionFixture(hive.minionsDir, 'dep', {
+            taskContent: 'Running task'
+        });
+        hive.spawnWaiting('waiter', 'Waiting task', 'dep');
+
+        const started = hive.checkAndStartDependents();
+        assert.deepEqual(started, []);
+    });
+
+    it('does not start non-waiting minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Create a running minion with dependsOn set (shouldn't be started again)
+        writeMinionFixture(hive.minionsDir, 'dep', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'Done'
+        });
+        writeMinionFixture(hive.minionsDir, 'already-running', {
+            status: 'running',
+            containerId: 'sha256:ar',
+            extraMeta: { dependsOn: 'dep' }
+        });
+
+        const started = hive.checkAndStartDependents();
+        assert.deepEqual(started, []);
+    });
+
+    it('starts multiple waiting minions in one pass', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Create completed dependency
+        writeMinionFixture(hive.minionsDir, 'dep', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'Done'
+        });
+        // Create two waiting minions depending on the same dep
+        hive.spawnWaiting('waiter-a', 'Task A', 'dep');
+        hive.spawnWaiting('waiter-b', 'Task B', 'dep');
+
+        const started = hive.checkAndStartDependents();
+        assert.equal(started.length, 2);
+        const names = started.map(s => s.name).sort();
+        assert.deepEqual(names, ['waiter-a', 'waiter-b']);
+    });
+
+    it('handles chain: A->B->C (only starts B when A completes, not C)', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // A is complete
+        writeMinionFixture(hive.minionsDir, 'A', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'Task A'
+        });
+        // B waits on A
+        hive.spawnWaiting('B', 'Task B', 'A');
+        // C waits on B
+        hive.spawnWaiting('C', 'Task C', 'B');
+
+        const started = hive.checkAndStartDependents();
+        // Only B should start (A is complete), C should not (B has no STATUS file yet)
+        assert.equal(started.length, 1);
+        assert.equal(started[0].name, 'B');
+        assert.equal(started[0].dependsOn, 'A');
+
+        // Verify C is still waiting
+        const metaC = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'C', 'meta.json'), 'utf8'
+        ));
+        assert.equal(metaC.status, 'waiting');
+    });
+
+    it('passes options through to start()', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'Done'
+        });
+        hive.spawnWaiting('waiter', 'Task', 'dep');
+
+        hive.checkAndStartDependents({ claudeToken: 'mytoken', keepAlive: true });
+
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.ok(runCall);
+        assert.includes(runCall, 'CLAUDE_CODE_OAUTH_TOKEN=mytoken');
+        assert.includes(runCall, 'KEEP_ALIVE=true');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

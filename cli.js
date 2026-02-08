@@ -53,6 +53,7 @@ Commands:
   clone <source> <new-name>    Clone a minion (task-only by default)
   rename <old> <new>           Rename a minion (must be stopped)
   retry <name>                 Retry a completed/failed minion (fresh container, same task)
+  watch-deps [--interval N]    Auto-start waiting minions when dependencies complete
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -923,6 +924,32 @@ async function main() {
                 const result = hive.rename(oldName, newName);
                 console.log(`✅ Minion renamed`);
                 console.log(`   Path: ${result.path}`);
+                break;
+            }
+
+            case 'watch-deps': {
+                const intervalSec = parseInt(parsed.interval) || 5;
+                const intervalMs = intervalSec * 1000;
+                const claudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+                console.log(`🔗 Watching for dependency completions every ${intervalSec}s...`);
+                console.log('   Press Ctrl+C to stop\n');
+
+                process.on('SIGINT', () => {
+                    if (hive._watchDepsStop) hive._watchDepsStop();
+                    console.log('\n\n👋 Stopped watching dependencies');
+                    process.exit(0);
+                });
+
+                await hive.watchDeps({
+                    intervalMs,
+                    claudeToken,
+                    keepAlive: parsed['keep-alive'],
+                    onStart(s) {
+                        const ts = new Date().toLocaleTimeString();
+                        console.log(`  [${ts}] ▶️  Started '${s.name}' (dependency '${s.dependsOn}' completed)`);
+                    }
+                });
                 break;
             }
 
