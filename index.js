@@ -466,6 +466,45 @@ class Hive {
     }
 
     /**
+     * Get stats for all running minions (for top command)
+     */
+    topOnce() {
+        const minions = this.list();
+        const running = minions.filter(m => m.containerStatus === 'running');
+        
+        if (running.length === 0) {
+            return [];
+        }
+        
+        const results = [];
+        for (const m of running) {
+            try {
+                const statsOutput = this._docker(`stats hive-${m.name} --no-stream --format "{{json .}}"`);
+                const stats = JSON.parse(statsOutput.trim());
+                
+                // Calculate uptime from createdAt
+                const created = new Date(m.createdAt);
+                const uptime = Date.now() - created.getTime();
+                const hours = Math.floor(uptime / 3600000);
+                const minutes = Math.floor((uptime % 3600000) / 60000);
+                const uptimeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+                
+                results.push({
+                    name: m.name,
+                    cpu: stats.CPUPerc || '0%',
+                    mem: stats.MemUsage || '0B / 0B',
+                    memPerc: stats.MemPerc || '0%',
+                    status: m.taskStatus || 'WORKING',
+                    uptime: uptimeStr
+                });
+            } catch {
+                // Skip minions we can't get stats for
+            }
+        }
+        return results;
+    }
+
+    /**
      * Save a task template
      */
     templateSave(name, content) {

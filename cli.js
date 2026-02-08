@@ -28,6 +28,7 @@ Commands:
   health                       Check system health (Docker, image, minions, disk)
   version                      Show Hive version
   stats <name>                 Get resource usage (CPU, memory, I/O)
+  top [--interval N]           Live dashboard of all running minions
   logs <name> [--lines N]      Get last N lines of logs (default 50)
   wait <name> [--timeout S]    Wait for minion to complete (default: 300s)
   watch <name>                 Stream live logs from a minion
@@ -413,6 +414,60 @@ async function main() {
                 console.log(`Net I/O: ${stats.NetIO || 'N/A'}`);
                 console.log(`Blk I/O: ${stats.BlockIO || 'N/A'}`);
                 console.log(`PIDs:    ${stats.PIDs || 'N/A'}`);
+                break;
+            }
+
+            case 'top': {
+                const refreshMs = parseInt(parsed.interval) || 2000;
+                
+                console.log('🐝 Hive Top - Press Ctrl+C to exit\n');
+                
+                const render = () => {
+                    const results = hive.topOnce();
+                    
+                    // Clear screen and move cursor to top
+                    process.stdout.write('\x1b[2J\x1b[H');
+                    
+                    console.log('🐝 Hive Top - Live Dashboard');
+                    console.log(`   Updated: ${new Date().toLocaleTimeString()}`);
+                    console.log('');
+                    
+                    if (results.length === 0) {
+                        console.log('   No running minions');
+                        return;
+                    }
+                    
+                    // Header
+                    console.log('   ' + 'NAME'.padEnd(20) + 'STATUS'.padEnd(12) + 'CPU'.padEnd(10) + 'MEM'.padEnd(10) + 'UPTIME');
+                    console.log('   ' + '-'.repeat(60));
+                    
+                    // Rows
+                    for (const m of results) {
+                        const icon = m.status === 'COMPLETE' ? '✅' : 
+                                    m.status === 'WORKING' ? '⚙️ ' : 
+                                    m.status === 'FAILED' ? '❌' : '⏳';
+                        console.log(`   ${m.name.padEnd(20)}${icon} ${m.status.padEnd(8)}${m.cpu.padEnd(10)}${m.memPerc.padEnd(10)}${m.uptime}`);
+                    }
+                    
+                    console.log('');
+                    console.log('   Press Ctrl+C to exit');
+                };
+                
+                // Initial render
+                render();
+                
+                // Refresh loop
+                const interval = setInterval(render, refreshMs);
+                
+                // Handle Ctrl+C gracefully
+                process.on('SIGINT', () => {
+                    clearInterval(interval);
+                    console.log('\n\n👋 Exiting...');
+                    process.exit(0);
+                });
+                
+                // Keep running
+                await new Promise(() => {});
                 break;
             }
 
