@@ -957,6 +957,93 @@ class Hive {
     }
 
     /**
+     * Parse age string to milliseconds
+     * Accepts: 7d, 24h, 30m (days, hours, minutes)
+     */
+    _parseAge(ageStr) {
+        const match = ageStr.match(/^(\d+)(d|h|m)$/);
+        if (!match) {
+            throw new Error(`Invalid age format: ${ageStr}. Use: 7d, 24h, 30m`);
+        }
+        const num = parseInt(match[1], 10);
+        const unit = match[2];
+        const multipliers = { d: 86400000, h: 3600000, m: 60000 };
+        return num * multipliers[unit];
+    }
+
+    /**
+     * Prune completed minions older than a threshold
+     * @param {Object} options - Prune options
+     * @param {string} options.olderThan - Age threshold (e.g., '7d', '24h', '30m')
+     * @param {boolean} options.all - Remove all completed regardless of age
+     * @param {boolean} options.dryRun - Just report what would be deleted
+     * @returns {Array} - List of pruned minion names
+     */
+    prune(options = {}) {
+        const olderThan = options.olderThan || '7d';
+        const ageMs = options.all ? 0 : this._parseAge(olderThan);
+        const now = Date.now();
+        const pruned = [];
+
+        const minions = this.list();
+
+        for (const minion of minions) {
+            // Only prune COMPLETE or FAILED minions
+            if (minion.taskStatus !== 'COMPLETE' && minion.taskStatus !== 'FAILED') {
+                continue;
+            }
+
+            // Check age
+            const createdAt = new Date(minion.createdAt).getTime();
+            const ageOfMinion = now - createdAt;
+
+            if (options.all || ageOfMinion >= ageMs) {
+                const minionDir = path.join(this.minionsDir, minion.name);
+
+                if (!options.dryRun) {
+                    // Remove container if exists
+                    try {
+                        this._docker(`rm -f hive-${minion.name}`);
+                    } catch {}
+
+                    // Remove workspace directory
+                    if (fs.existsSync(minionDir)) {
+                        fs.rmSync(minionDir, { recursive: true });
+                    }
+
+                    // Remove network inbox if exists
+                    const inboxDir = path.join(this.networkDir, minion.name);
+                    if (fs.existsSync(inboxDir)) {
+                        fs.rmSync(inboxDir, { recursive: true });
+                    }
+                }
+
+                pruned.push({
+                    name: minion.name,
+                    status: minion.taskStatus,
+                    createdAt: minion.createdAt,
+                    age: this._formatAge(ageOfMinion)
+                });
+            }
+        }
+
+        return pruned;
+    }
+
+    /**
+     * Format age in human readable format
+     */
+    _formatAge(ms) {
+        const days = Math.floor(ms / 86400000);
+        const hours = Math.floor((ms % 86400000) / 3600000);
+        const minutes = Math.floor((ms % 3600000) / 60000);
+        
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+    }
+
+    /**
      * Helper: recursively copy a directory
      */
     _copyDirRecursive(src, dest) {

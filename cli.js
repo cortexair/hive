@@ -23,7 +23,7 @@ Commands:
   spawn <name> <task>          Spawn a new minion with a task
   spawn <name> -f <file>       Spawn with task from file
   spawn <name> -t <template>   Spawn with a saved template
-  list [--json]                List all minions
+  list [--json]                List all minions (alias: ps)
   status <name> [--json]       Get minion status and output
   health                       Check system health (Docker, image, minions, disk)
   version                      Show Hive version
@@ -38,7 +38,8 @@ Commands:
   resume <name>                Resume a paused minion
   restart <name>               Restart a stopped minion
   kill <name>                  Terminate a minion
-  cleanup                      Remove completed minions
+  cleanup                      Remove completed minions (containers only)
+  prune [--older-than 7d]      Remove old completed minions (workspace + container)
   build                        Build the minion Docker image
   network send <from> <to> <msg>  Send a message between minions
   network inbox <name>           Read a minion's inbox
@@ -57,6 +58,9 @@ Options:
   --memory <limit>       Memory limit (e.g., 512m, 2g)
   --cpus <limit>         CPU limit (e.g., 0.5, 2)
   --no-sudo              Don't use sudo for Docker commands
+  --older-than <age>     For prune: age threshold (7d, 24h, 30m)
+  --all                  For prune: remove ALL completed (ignore age)
+  --dry-run              For prune: show what would be deleted
   --logs                 Include container logs in export
   --inbox                Include inbox messages in export/clone
   --overwrite            Overwrite existing minion on import
@@ -236,6 +240,7 @@ async function main() {
                 break;
             }
 
+            case 'ps':  // alias for list
             case 'list': {
                 const minions = hive.list();
                 
@@ -385,6 +390,31 @@ async function main() {
                     console.log('Nothing to clean up');
                 } else {
                     console.log(`Cleaned: ${cleaned.join(', ')}`);
+                }
+                break;
+            }
+
+            case 'prune': {
+                const olderThan = parsed['older-than'] || '7d';
+                const dryRun = parsed['dry-run'] || false;
+                const all = parsed.all || false;
+
+                if (dryRun) {
+                    console.log('🔍 Dry run - showing what would be pruned:\n');
+                } else {
+                    console.log(`🗑️  Pruning completed minions${all ? '' : ` older than ${olderThan}`}...\n`);
+                }
+
+                const pruned = hive.prune({ olderThan, dryRun, all });
+
+                if (pruned.length === 0) {
+                    console.log('Nothing to prune');
+                } else {
+                    for (const m of pruned) {
+                        const prefix = dryRun ? 'Would prune' : 'Pruned';
+                        console.log(`  ${m.status === 'COMPLETE' ? '✅' : '❌'} ${m.name} (${m.status}, age: ${m.age})`);
+                    }
+                    console.log(`\n${dryRun ? 'Would prune' : 'Pruned'}: ${pruned.length} minion(s)`);
                 }
                 break;
             }

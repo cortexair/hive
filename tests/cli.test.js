@@ -356,3 +356,34 @@ describe('CLI health command', () => {
         assert.includes(output, 'Health Check');
     });
 });
+
+describe('CLI prune command', () => {
+    it('shows prune command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'prune');
+    });
+
+    it('runs prune with nothing to prune', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('prune --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'Nothing to prune');
+    });
+
+    it('supports --dry-run flag', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('prune --dry-run --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'Dry run');
+    });
+});
+
+describe('CLI ps alias', () => {
+    it('ps is alias for list', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('ps --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'No minions active');
+    });
+});

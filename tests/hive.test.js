@@ -1524,6 +1524,147 @@ describe('Hive.clearInbox', () => {
     });
 });
 
+// ─── Prune ────────────────────────────────────────────────────────────
+
+describe('Hive.prune()', () => {
+    let tmp, hive;
+
+    afterEach(() => {
+        if (tmp) tmp.cleanup();
+    });
+
+    it('returns empty array when no completed minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        // Create a working minion
+        const minionDir = path.join(hive.minionsDir, 'worker-1');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'worker-1',
+            createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
+            status: 'running'
+        }));
+        fs.writeFileSync(path.join(minionDir, 'STATUS'), 'WORKING');
+
+        const pruned = hive.prune();
+        assert.deepEqual(pruned, []);
+    });
+
+    it('prunes completed minions older than threshold', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        // Create an old completed minion
+        const oldDir = path.join(hive.minionsDir, 'old-worker');
+        fs.mkdirSync(oldDir, { recursive: true });
+        fs.writeFileSync(path.join(oldDir, 'meta.json'), JSON.stringify({
+            name: 'old-worker',
+            createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
+        }));
+        fs.writeFileSync(path.join(oldDir, 'STATUS'), 'COMPLETE');
+
+        const pruned = hive.prune({ olderThan: '7d' });
+        assert.equal(pruned.length, 1);
+        assert.equal(pruned[0].name, 'old-worker');
+        assert.ok(!fs.existsSync(oldDir), 'workspace should be removed');
+    });
+
+    it('keeps completed minions newer than threshold', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        // Create a recent completed minion
+        const recentDir = path.join(hive.minionsDir, 'recent-worker');
+        fs.mkdirSync(recentDir, { recursive: true });
+        fs.writeFileSync(path.join(recentDir, 'meta.json'), JSON.stringify({
+            name: 'recent-worker',
+            createdAt: new Date(Date.now() - 3600000).toISOString() // 1 hour ago
+        }));
+        fs.writeFileSync(path.join(recentDir, 'STATUS'), 'COMPLETE');
+
+        const pruned = hive.prune({ olderThan: '7d' });
+        assert.equal(pruned.length, 0);
+        assert.ok(fs.existsSync(recentDir), 'workspace should still exist');
+    });
+
+    it('prunes FAILED minions too', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        const failedDir = path.join(hive.minionsDir, 'failed-worker');
+        fs.mkdirSync(failedDir, { recursive: true });
+        fs.writeFileSync(path.join(failedDir, 'meta.json'), JSON.stringify({
+            name: 'failed-worker',
+            createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
+        }));
+        fs.writeFileSync(path.join(failedDir, 'STATUS'), 'FAILED');
+
+        const pruned = hive.prune({ olderThan: '7d' });
+        assert.equal(pruned.length, 1);
+        assert.equal(pruned[0].status, 'FAILED');
+    });
+
+    it('--all ignores age and prunes everything completed', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        // Create a recent completed minion
+        const recentDir = path.join(hive.minionsDir, 'recent-worker');
+        fs.mkdirSync(recentDir, { recursive: true });
+        fs.writeFileSync(path.join(recentDir, 'meta.json'), JSON.stringify({
+            name: 'recent-worker',
+            createdAt: new Date().toISOString() // just now
+        }));
+        fs.writeFileSync(path.join(recentDir, 'STATUS'), 'COMPLETE');
+
+        const pruned = hive.prune({ all: true });
+        assert.equal(pruned.length, 1);
+        assert.ok(!fs.existsSync(recentDir), 'workspace should be removed');
+    });
+
+    it('--dry-run does not actually remove anything', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        const oldDir = path.join(hive.minionsDir, 'old-worker');
+        fs.mkdirSync(oldDir, { recursive: true });
+        fs.writeFileSync(path.join(oldDir, 'meta.json'), JSON.stringify({
+            name: 'old-worker',
+            createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
+        }));
+        fs.writeFileSync(path.join(oldDir, 'STATUS'), 'COMPLETE');
+
+        const pruned = hive.prune({ olderThan: '7d', dryRun: true });
+        assert.equal(pruned.length, 1);
+        assert.ok(fs.existsSync(oldDir), 'workspace should still exist (dry run)');
+    });
+
+    it('parses age formats correctly', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        
+        // Test 24h format
+        const oldDir = path.join(hive.minionsDir, 'old-worker');
+        fs.mkdirSync(oldDir, { recursive: true });
+        fs.writeFileSync(path.join(oldDir, 'meta.json'), JSON.stringify({
+            name: 'old-worker',
+            createdAt: new Date(Date.now() - 86400000 * 2).toISOString() // 2 days ago
+        }));
+        fs.writeFileSync(path.join(oldDir, 'STATUS'), 'COMPLETE');
+
+        const pruned = hive.prune({ olderThan: '24h' });
+        assert.equal(pruned.length, 1);
+    });
+
+    it('throws on invalid age format', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+
+        assert.throws(() => hive.prune({ olderThan: 'invalid' }), /Invalid age format/);
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {
