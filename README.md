@@ -46,6 +46,9 @@ hive spawn worker-2 -t code-review
 # List active minions
 hive list
 
+# Live dashboard of all minions
+hive top
+
 # Check minion status
 hive status worker-1
 
