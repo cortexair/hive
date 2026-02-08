@@ -152,6 +152,125 @@ class Hive {
     }
 
     /**
+     * Create a minion in 'waiting' state that depends on another minion completing first.
+     * The container is NOT started - use start() to launch it after the dependency completes.
+     * @param {string} name - Name for the new minion
+     * @param {string} task - Task description
+     * @param {string} afterMinion - Name of the dependency minion
+     * @param {Object} options - Spawn options (memory, cpus)
+     * @returns {{ name, minionDir, status, dependsOn }}
+     */
+    spawnWaiting(name, task, afterMinion, options = {}) {
+        this._validateName(name);
+        const minionDir = path.join(this.minionsDir, name);
+
+        if (fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} already exists`);
+        }
+
+        // Verify dependency minion exists
+        const depDir = path.join(this.minionsDir, afterMinion);
+        if (!fs.existsSync(depDir)) {
+            throw new Error(`Dependency minion '${afterMinion}' not found`);
+        }
+
+        // Create minion workspace
+        fs.mkdirSync(minionDir, { recursive: true, mode: 0o777 });
+        fs.mkdirSync(path.join(minionDir, 'output'), { recursive: true, mode: 0o777 });
+        fs.chmodSync(minionDir, 0o777);
+        fs.chmodSync(path.join(minionDir, 'output'), 0o777);
+
+        // Write task file
+        fs.writeFileSync(path.join(minionDir, 'TASK.md'), task, { mode: 0o666 });
+
+        // Write metadata with waiting status
+        const meta = {
+            name,
+            createdAt: new Date().toISOString(),
+            task: task.substring(0, 200),
+            status: 'waiting',
+            containerId: null,
+            dependsOn: afterMinion
+        };
+        if (options.memory) meta.memory = options.memory;
+        if (options.cpus) meta.cpus = options.cpus;
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify(meta, null, 2));
+
+        return { name, minionDir, status: 'waiting', dependsOn: afterMinion };
+    }
+
+    /**
+     * Start a pending/waiting minion by creating and running its container.
+     * @param {string} name - Name of the minion to start
+     * @param {Object} options - Start options (claudeToken, keepAlive, memory, cpus)
+     * @returns {{ name, containerId, minionDir }}
+     */
+    start(name, options = {}) {
+        const minionDir = path.join(this.minionsDir, name);
+
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (meta.status !== 'pending' && meta.status !== 'waiting') {
+            throw new Error(`Minion '${name}' is ${meta.status}, not pending/waiting`);
+        }
+
+        const taskPath = path.join(minionDir, 'TASK.md');
+        if (!fs.existsSync(taskPath)) {
+            throw new Error(`Minion '${name}' has no TASK.md`);
+        }
+
+        // Build image if needed
+        if (!this.imageExists()) {
+            const projectDir = path.dirname(__dirname);
+            this.buildImage(path.join(projectDir, 'hive'));
+        }
+
+        // Carry forward resource limits from meta unless overridden
+        const memory = options.memory || meta.memory;
+        const cpus = options.cpus || meta.cpus;
+
+        // Environment variables
+        const envVars = [];
+        if (options.claudeToken) {
+            envVars.push(`-e CLAUDE_CODE_OAUTH_TOKEN=${options.claudeToken}`);
+        }
+        if (options.keepAlive) {
+            envVars.push('-e KEEP_ALIVE=true');
+        }
+
+        // Resource limits
+        const resourceArgs = [];
+        if (memory) {
+            resourceArgs.push(`--memory=${memory}`);
+        }
+        if (cpus) {
+            resourceArgs.push(`--cpus=${cpus}`);
+        }
+
+        // Start container
+        const envStr = envVars.join(' ');
+        const resourceStr = resourceArgs.join(' ');
+        const containerId = this._docker(
+            `run -d --name hive-${name} ${envStr} ${resourceStr} -v ${minionDir}:/home/minion/workspace ${IMAGE_NAME}`
+        ).trim();
+
+        // Update metadata
+        meta.containerId = containerId;
+        meta.status = 'running';
+        meta.startedAt = new Date().toISOString();
+        if (memory) meta.memory = memory;
+        if (cpus) meta.cpus = cpus;
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+        return { name, containerId, minionDir };
+    }
+
+    /**
      * List all minions
      */
     list() {

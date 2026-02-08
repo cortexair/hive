@@ -23,6 +23,8 @@ Commands:
   spawn <name> <task>          Spawn a new minion with a task
   spawn <name> -f <file>       Spawn with task from file
   spawn <name> -t <template>   Spawn with a saved template
+  spawn <name> <task> --after <dep>  Spawn after dependency completes
+  start <name>                 Start a waiting/pending minion
   list [--json]                List all minions (alias: ps)
   status <name> [--json]       Get minion status and output
   health                       Check system health (Docker, image, minions, disk)
@@ -58,6 +60,8 @@ Commands:
 
 Options:
   --keep-alive           Keep container running after task
+  --after <name>         Wait for dependency minion to complete before starting
+  --timeout <seconds>    Timeout for --after waiting (default: 0 = no timeout)
   --memory <limit>       Memory limit (e.g., 512m, 2g)
   --cpus <limit>         CPU limit (e.g., 0.5, 2)
   --no-sudo              Don't use sudo for Docker commands
@@ -73,6 +77,8 @@ Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
   hive spawn researcher-1 -f research-task.md --memory 1g --cpus 1
   hive spawn worker-2 -t code-review
+  hive spawn step-2 "Analyze results" --after step-1
+  hive start step-2
   hive template save code-review -f review-task.md
   echo "Review the PR" | hive template save quick-review
   hive export worker-1 --logs --inbox
@@ -234,12 +240,50 @@ async function main() {
                     spawnOptions.cpus = parsed.cpus;
                 }
                 
-                const result = hive.spawn(name, task, spawnOptions);
-                console.log(`✅ Minion spawned`);
+                if (parsed.after) {
+                    // Dependency chaining: create in waiting state
+                    const result = hive.spawnWaiting(name, task, parsed.after, spawnOptions);
+                    console.log(`✅ Minion created (waiting)`);
+                    console.log(`   Status:    waiting for '${parsed.after}' to complete`);
+                    console.log(`   Workspace: ${result.minionDir}`);
+                    if (parsed.memory) console.log(`   Memory:    ${parsed.memory}`);
+                    if (parsed.cpus) console.log(`   CPUs:      ${parsed.cpus}`);
+                    console.log(`\n   Start manually: hive start ${name}`);
+                } else {
+                    const result = hive.spawn(name, task, spawnOptions);
+                    console.log(`✅ Minion spawned`);
+                    console.log(`   Container: ${result.containerId.substring(0, 12)}`);
+                    console.log(`   Workspace: ${result.minionDir}`);
+                    if (parsed.memory) console.log(`   Memory:    ${parsed.memory}`);
+                    if (parsed.cpus) console.log(`   CPUs:      ${parsed.cpus}`);
+                }
+                break;
+            }
+
+            case 'start': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive start <name>');
+                    process.exit(1);
+                }
+
+                const claudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+                if (!claudeToken) {
+                    console.warn('⚠️  No CLAUDE_CODE_OAUTH_TOKEN set - minion may not be able to use Claude');
+                }
+
+                console.log(`🐝 Starting minion: ${name}`);
+                const startOptions = {
+                    claudeToken,
+                    keepAlive: parsed['keep-alive']
+                };
+                if (parsed.memory) startOptions.memory = parsed.memory;
+                if (parsed.cpus) startOptions.cpus = parsed.cpus;
+
+                const result = hive.start(name, startOptions);
+                console.log(`✅ Minion started`);
                 console.log(`   Container: ${result.containerId.substring(0, 12)}`);
                 console.log(`   Workspace: ${result.minionDir}`);
-                if (parsed.memory) console.log(`   Memory:    ${parsed.memory}`);
-                if (parsed.cpus) console.log(`   CPUs:      ${parsed.cpus}`);
                 break;
             }
 
@@ -260,11 +304,15 @@ async function main() {
                 console.log('🐝 Active Minions:\n');
                 for (const m of minions) {
                     const status = m.taskStatus || m.status || 'unknown';
-                    const icon = status === 'COMPLETE' ? '✅' : 
-                                status === 'WORKING' ? '⚙️' : 
-                                status === 'FAILED' ? '❌' : '⏳';
+                    const icon = status === 'COMPLETE' ? '✅' :
+                                status === 'WORKING' ? '⚙️' :
+                                status === 'FAILED' ? '❌' :
+                                status === 'waiting' ? '⏸️' : '⏳';
                     console.log(`${icon} ${m.name}`);
                     console.log(`   Status: ${status}`);
+                    if (m.dependsOn) {
+                        console.log(`   After:  ${m.dependsOn}`);
+                    }
                     console.log(`   Task: ${m.task?.substring(0, 60)}...`);
                     console.log(`   Created: ${m.createdAt}`);
                     console.log('');

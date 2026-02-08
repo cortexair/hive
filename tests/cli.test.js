@@ -379,6 +379,75 @@ describe('CLI prune command', () => {
     });
 });
 
+describe('CLI start validation', () => {
+    it('errors when name is missing', () => {
+        const { output, exitCode } = runCli('start');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
+    it('errors when minion does not exist', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('start nonexistent', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+});
+
+describe('CLI spawn --after validation', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('errors when dependency minion does not exist', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli(
+            'spawn step-2 "Do stuff" --after nonexistent --no-sudo',
+            { hiveDir: tmp.dir }
+        );
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+
+    it('creates waiting minion when --after is provided with valid dep', () => {
+        tmp = tmpDir();
+        // Create a dependency minion directory manually
+        const depDir = path.join(tmp.dir, 'minions', 'step-1');
+        fs.mkdirSync(depDir, { recursive: true });
+        fs.writeFileSync(path.join(depDir, 'meta.json'), JSON.stringify({
+            name: 'step-1', status: 'running', containerId: 'abc123',
+            createdAt: '2026-01-01T00:00:00.000Z', task: 'First task'
+        }));
+
+        const { output, exitCode } = runCli(
+            'spawn step-2 "Analyze results" --after step-1 --no-sudo',
+            { hiveDir: tmp.dir }
+        );
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'waiting');
+        assert.includes(output, 'step-1');
+
+        // Verify the minion was created with waiting status
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(tmp.dir, 'minions', 'step-2', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'waiting');
+        assert.equal(meta.dependsOn, 'step-1');
+    });
+});
+
+describe('CLI help includes start and --after', () => {
+    it('shows start command in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'start');
+    });
+
+    it('shows --after option in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, '--after');
+    });
+});
+
 describe('CLI ps alias', () => {
     it('ps is alias for list', () => {
         tmp = tmpDir();

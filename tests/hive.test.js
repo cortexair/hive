@@ -359,6 +359,222 @@ describe('Hive.spawn', () => {
     });
 });
 
+// ─── SpawnWaiting ────────────────────────────────────────────────
+
+describe('Hive.spawnWaiting', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('creates workspace with waiting status', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        // Create dependency minion first
+        writeMinionFixture(hive.minionsDir, 'step-1', { taskContent: 'First task' });
+
+        const result = hive.spawnWaiting('step-2', 'Second task', 'step-1');
+        assert.equal(result.status, 'waiting');
+        assert.equal(result.dependsOn, 'step-1');
+
+        const minionDir = path.join(tmp.dir, 'minions', 'step-2');
+        assert.ok(fs.existsSync(minionDir));
+        assert.ok(fs.existsSync(path.join(minionDir, 'output')));
+    });
+
+    it('writes TASK.md with full task content', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+
+        hive.spawnWaiting('waiter', 'My waiting task', 'dep');
+        const task = fs.readFileSync(path.join(tmp.dir, 'minions', 'waiter', 'TASK.md'), 'utf8');
+        assert.equal(task, 'My waiting task');
+    });
+
+    it('writes meta.json with waiting status and dependsOn', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+
+        hive.spawnWaiting('waiter', 'Task text', 'dep');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(tmp.dir, 'minions', 'waiter', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.name, 'waiter');
+        assert.equal(meta.status, 'waiting');
+        assert.equal(meta.dependsOn, 'dep');
+        assert.equal(meta.containerId, null);
+        assert.ok(meta.createdAt);
+    });
+
+    it('does not start a container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+
+        hive.spawnWaiting('waiter', 'Task', 'dep');
+        const runCalls = hive._dockerCalls.filter(c => c.startsWith('run'));
+        assert.equal(runCalls.length, 0);
+    });
+
+    it('throws when dependency minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(
+            () => hive.spawnWaiting('waiter', 'Task', 'nonexistent'),
+            "Dependency minion 'nonexistent' not found"
+        );
+    });
+
+    it('throws when minion name already exists', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+        writeMinionFixture(hive.minionsDir, 'dupe', { taskContent: 'Existing' });
+
+        assert.throws(
+            () => hive.spawnWaiting('dupe', 'Task', 'dep'),
+            'already exists'
+        );
+    });
+
+    it('throws on invalid minion name', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+        assert.throws(() => hive.spawnWaiting('bad name', 'Task', 'dep'), 'Invalid minion name');
+    });
+
+    it('stores resource limits in metadata', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+
+        hive.spawnWaiting('waiter', 'Task', 'dep', { memory: '1g', cpus: '2' });
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(tmp.dir, 'minions', 'waiter', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.memory, '1g');
+        assert.equal(meta.cpus, '2');
+    });
+});
+
+// ─── Start ───────────────────────────────────────────────────────
+
+describe('Hive.start', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('starts a waiting minion and creates container', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep task' });
+        hive.spawnWaiting('waiter', 'My task', 'dep');
+
+        const result = hive.start('waiter', { claudeToken: 'tok' });
+        assert.equal(result.name, 'waiter');
+        assert.equal(result.containerId, 'abc123containerid');
+    });
+
+    it('starts a pending minion (from clone)', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'pending-m', {
+            status: 'pending',
+            taskContent: 'A task',
+            containerId: null,
+            extraMeta: { containerId: null }
+        });
+        // Overwrite meta to ensure pending status with no containerId
+        fs.writeFileSync(path.join(hive.minionsDir, 'pending-m', 'meta.json'), JSON.stringify({
+            name: 'pending-m',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            task: 'A task',
+            status: 'pending',
+            containerId: null
+        }));
+
+        const result = hive.start('pending-m', { claudeToken: 'tok' });
+        assert.equal(result.name, 'pending-m');
+        assert.ok(result.containerId);
+    });
+
+    it('updates meta.json to running with startedAt', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep' });
+        hive.spawnWaiting('w', 'Task', 'dep');
+
+        hive.start('w');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(tmp.dir, 'minions', 'w', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'running');
+        assert.ok(meta.startedAt);
+        assert.equal(meta.containerId, 'abc123containerid');
+    });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.start('ghost'), 'not found');
+    });
+
+    it('throws when minion is already running', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'running-m', {
+            status: 'running',
+            containerId: 'sha256:abc'
+        });
+
+        assert.throws(() => hive.start('running-m'), 'not pending/waiting');
+    });
+
+    it('throws when minion has no TASK.md', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-task');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-task', status: 'waiting', containerId: null
+        }));
+
+        assert.throws(() => hive.start('no-task'), 'no TASK.md');
+    });
+
+    it('carries forward resource limits from meta', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep' });
+        hive.spawnWaiting('res', 'Task', 'dep', { memory: '512m', cpus: '1' });
+
+        hive.start('res');
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=512m');
+        assert.includes(runCall, '--cpus=1');
+    });
+
+    it('allows overriding resource limits on start', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep' });
+        hive.spawnWaiting('ovr', 'Task', 'dep', { memory: '512m' });
+
+        hive.start('ovr', { memory: '2g' });
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=2g');
+    });
+
+    it('passes claudeToken env var', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'dep', { taskContent: 'Dep' });
+        hive.spawnWaiting('tok', 'Task', 'dep');
+
+        hive.start('tok', { claudeToken: 'mytoken' });
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, 'CLAUDE_CODE_OAUTH_TOKEN=mytoken');
+    });
+});
+
 // ─── List ────────────────────────────────────────────────────────────
 
 describe('Hive.list', () => {
