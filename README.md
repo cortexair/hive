@@ -55,6 +55,13 @@ hive status worker-1
 # Collect minion output
 hive collect worker-1
 
+# View logs (last 50 lines by default)
+hive logs worker-1
+
+# Stream logs in real-time (follow mode)
+hive logs worker-1 -F
+hive logs worker-1 --follow
+
 # Terminate a minion
 hive kill worker-1
 

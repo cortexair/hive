@@ -266,9 +266,28 @@ describe('CLI logs validation', () => {
         assert.includes(output, 'Name required');
     });
 
+    it('errors when name is missing with --follow', () => {
+        const { output, exitCode } = runCli('logs --follow');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
+    it('errors when name is missing with -F', () => {
+        const { output, exitCode } = runCli('logs -F');
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Name required');
+    });
+
     it('errors when minion does not exist', () => {
         tmp = tmpDir();
         const { output, exitCode } = runCli('logs nonexistent', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+
+    it('errors when minion does not exist with --follow', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('logs nonexistent --follow', { hiveDir: tmp.dir });
         assert.equal(exitCode, 1);
         assert.includes(output, 'not found');
     });

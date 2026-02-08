@@ -277,6 +277,27 @@ class Hive {
     }
 
     /**
+     * Stream logs from a minion (follow mode)
+     * Returns a child process that streams logs to stdout/stderr
+     */
+    logsFollow(name, lines = 50) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion ${name} not found`);
+        }
+
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+        
+        if (!meta.containerId) {
+            throw new Error(`Minion ${name} has no container`);
+        }
+
+        const args = ['logs', '-f', '--tail', String(lines), `hive-${name}`];
+        return this._dockerAsync(args);
+    }
+
+    /**
      * Kill a minion
      */
     kill(name) {

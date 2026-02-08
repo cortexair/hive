@@ -29,7 +29,7 @@ Commands:
   version                      Show Hive version
   stats <name>                 Get resource usage (CPU, memory, I/O)
   top [--interval N]           Live dashboard of all running minions
-  logs <name> [--lines N]      Get last N lines of logs (default 50)
+  logs <name> [--lines N] [-F] Get last N lines of logs (default 50), -F to follow
   wait <name> [--timeout S]    Wait for minion to complete (default: 300s)
   watch <name>                 Stream live logs from a minion
   exec <name> [command]        Run a command in a minion's container (default: /bin/bash)
@@ -98,6 +98,9 @@ function parseArgs(args) {
         } else if (args[i] === '-f' && args[i + 1]) {
             result.file = args[i + 1];
             i += 2;
+        } else if (args[i] === '-F') {
+            result.follow = true;
+            i++;
         } else if (args[i] === '-t' && args[i + 1]) {
             result.template = args[i + 1];
             i += 2;
@@ -295,8 +298,26 @@ async function main() {
                 }
 
                 const lines = parseInt(parsed.lines) || 50;
-                const logs = hive.logs(name, lines);
-                console.log(logs);
+                const follow = parsed.follow || parsed.F;
+
+                if (follow) {
+                    console.log(`📜 Following logs for: ${name} (Ctrl+C to exit)`);
+                    const proc = hive.logsFollow(name, lines);
+                    proc.stdout.pipe(process.stdout);
+                    proc.stderr.pipe(process.stderr);
+                    
+                    // Keep process alive until docker logs exits or Ctrl+C
+                    await new Promise((resolve) => {
+                        proc.on('close', resolve);
+                        process.on('SIGINT', () => {
+                            proc.kill();
+                            resolve();
+                        });
+                    });
+                } else {
+                    const logs = hive.logs(name, lines);
+                    console.log(logs);
+                }
                 break;
             }
 
