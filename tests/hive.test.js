@@ -1729,6 +1729,208 @@ describe('Hive.prune()', () => {
     });
 });
 
+// ─── Retry ────────────────────────────────────────────────────────────
+
+describe('Hive.retry', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws when minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.retry('ghost'), 'not found');
+    });
+
+    it('throws when minion has no TASK.md', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const minionDir = path.join(hive.minionsDir, 'no-task');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'no-task', createdAt: '2026-01-01T00:00:00.000Z',
+            task: 'test', status: 'running', containerId: 'sha256:abc'
+        }));
+        assert.throws(() => hive.retry('no-task'), 'no TASK.md');
+    });
+
+    it('kills old container via docker stop and rm', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'r1', {
+            taskStatus: 'FAILED',
+            containerId: 'sha256:r1',
+            taskContent: 'Build something'
+        });
+
+        hive.retry('r1');
+        const stopCall = hive._dockerCalls.find(c => c.startsWith('stop'));
+        const rmCall = hive._dockerCalls.find(c => c.startsWith('rm'));
+        assert.ok(stopCall);
+        assert.ok(rmCall);
+        assert.includes(stopCall, 'hive-r1');
+        assert.includes(rmCall, 'hive-r1');
+    });
+
+    it('does not throw if old container is already gone', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.startsWith('stop') || cmd.startsWith('rm hive-')) {
+                    throw new Error('no such container');
+                }
+                if (cmd.includes('image inspect')) return '[]';
+                if (cmd.startsWith('run ')) return 'newcontainer123\n';
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'gone', {
+            taskStatus: 'COMPLETE',
+            containerId: 'sha256:gone',
+            taskContent: 'Do stuff'
+        });
+
+        assert.doesNotThrow(() => hive.retry('gone'));
+    });
+
+    it('clears STATUS file', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'st', {
+            taskStatus: 'FAILED',
+            taskContent: 'A task'
+        });
+
+        hive.retry('st');
+        const statusPath = path.join(hive.minionsDir, 'st', 'STATUS');
+        assert.notOk(fs.existsSync(statusPath));
+    });
+
+    it('clears and recreates output directory', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'out', {
+            taskStatus: 'COMPLETE',
+            output: 'old output data',
+            taskContent: 'A task'
+        });
+
+        hive.retry('out');
+        const outputDir = path.join(hive.minionsDir, 'out', 'output');
+        assert.ok(fs.existsSync(outputDir));
+        const outputLog = path.join(outputDir, 'claude-output.log');
+        assert.notOk(fs.existsSync(outputLog));
+    });
+
+    it('starts a new container with same task', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'task-test', {
+            taskStatus: 'FAILED',
+            taskContent: 'Build a REST API'
+        });
+
+        hive.retry('task-test');
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.ok(runCall);
+        assert.includes(runCall, 'hive-task-test');
+    });
+
+    it('returns name, containerId, and minionDir', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'ret', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'A task'
+        });
+
+        const result = hive.retry('ret');
+        assert.equal(result.name, 'ret');
+        assert.equal(result.containerId, 'abc123containerid');
+        assert.equal(result.minionDir, path.join(tmp.dir, 'minions', 'ret'));
+    });
+
+    it('updates meta.json with running status and retriedAt', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'meta-retry', {
+            taskStatus: 'FAILED',
+            taskContent: 'A task'
+        });
+
+        hive.retry('meta-retry');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'meta-retry', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.status, 'running');
+        assert.equal(meta.name, 'meta-retry');
+        assert.ok(meta.retriedAt);
+        assert.ok(meta.retryOf);
+        assert.equal(meta.containerId, 'abc123containerid');
+    });
+
+    it('preserves original TASK.md content', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'task-keep', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'Build a CLI tool with Node.js'
+        });
+
+        hive.retry('task-keep');
+        const task = fs.readFileSync(
+            path.join(hive.minionsDir, 'task-keep', 'TASK.md'), 'utf8'
+        );
+        assert.equal(task, 'Build a CLI tool with Node.js');
+    });
+
+    it('carries forward resource limits from old meta', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'res', {
+            taskStatus: 'FAILED',
+            taskContent: 'A task',
+            extraMeta: { memory: '1g', cpus: '2' }
+        });
+
+        hive.retry('res');
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=1g');
+        assert.includes(runCall, '--cpus=2');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'res', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.memory, '1g');
+        assert.equal(meta.cpus, '2');
+    });
+
+    it('allows overriding resource limits', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'override', {
+            taskStatus: 'FAILED',
+            taskContent: 'A task',
+            extraMeta: { memory: '512m', cpus: '1' }
+        });
+
+        hive.retry('override', { memory: '2g', cpus: '4' });
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=2g');
+        assert.includes(runCall, '--cpus=4');
+    });
+
+    it('passes claudeToken env var when provided', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'tok', {
+            taskStatus: 'COMPLETE',
+            taskContent: 'A task'
+        });
+
+        hive.retry('tok', { claudeToken: 'mytoken' });
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, 'CLAUDE_CODE_OAUTH_TOKEN=mytoken');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

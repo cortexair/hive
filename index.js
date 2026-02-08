@@ -1063,6 +1063,101 @@ class Hive {
     }
 
     /**
+     * Retry a completed/failed minion - kill old container, reset workspace, spawn fresh
+     * @param {string} name - Name of the minion to retry
+     * @param {Object} options - Spawn options (claudeToken, keepAlive, memory, cpus)
+     * @returns {{ name, containerId, minionDir }}
+     */
+    retry(name, options = {}) {
+        const minionDir = path.join(this.minionsDir, name);
+
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const taskPath = path.join(minionDir, 'TASK.md');
+        if (!fs.existsSync(taskPath)) {
+            throw new Error(`Minion '${name}' has no TASK.md`);
+        }
+
+        const task = fs.readFileSync(taskPath, 'utf8');
+        const metaPath = path.join(minionDir, 'meta.json');
+        const oldMeta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        // Kill old container if present
+        try {
+            this._docker(`stop hive-${name}`);
+            this._docker(`rm hive-${name}`);
+        } catch {
+            // Container might already be stopped/removed
+        }
+
+        // Clear STATUS file
+        const statusPath = path.join(minionDir, 'STATUS');
+        if (fs.existsSync(statusPath)) {
+            fs.rmSync(statusPath);
+        }
+
+        // Clear output directory
+        const outputDir = path.join(minionDir, 'output');
+        if (fs.existsSync(outputDir)) {
+            fs.rmSync(outputDir, { recursive: true });
+        }
+        fs.mkdirSync(outputDir, { recursive: true, mode: 0o777 });
+
+        // Carry forward resource limits from old meta unless overridden
+        const memory = options.memory || oldMeta.memory;
+        const cpus = options.cpus || oldMeta.cpus;
+
+        // Build image if needed
+        if (!this.imageExists()) {
+            const projectDir = path.dirname(__dirname);
+            this.buildImage(path.join(projectDir, 'hive'));
+        }
+
+        // Environment variables
+        const envVars = [];
+        if (options.claudeToken) {
+            envVars.push(`-e CLAUDE_CODE_OAUTH_TOKEN=${options.claudeToken}`);
+        }
+        if (options.keepAlive) {
+            envVars.push('-e KEEP_ALIVE=true');
+        }
+
+        // Resource limits
+        const resourceArgs = [];
+        if (memory) {
+            resourceArgs.push(`--memory=${memory}`);
+        }
+        if (cpus) {
+            resourceArgs.push(`--cpus=${cpus}`);
+        }
+
+        // Start container
+        const envStr = envVars.join(' ');
+        const resourceStr = resourceArgs.join(' ');
+        const containerId = this._docker(
+            `run -d --name hive-${name} ${envStr} ${resourceStr} -v ${minionDir}:/home/minion/workspace ${IMAGE_NAME}`
+        ).trim();
+
+        // Write updated metadata
+        const meta = {
+            name,
+            createdAt: new Date().toISOString(),
+            task: task.substring(0, 200),
+            status: 'running',
+            containerId,
+            retriedAt: new Date().toISOString(),
+            retryOf: oldMeta.createdAt
+        };
+        if (memory) meta.memory = memory;
+        if (cpus) meta.cpus = cpus;
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+        return { name, containerId, minionDir };
+    }
+
+    /**
      * Helper: recursively copy a directory
      */
     _copyDirRecursive(src, dest) {

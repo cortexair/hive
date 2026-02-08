@@ -48,6 +48,7 @@ Commands:
   export <name> [--output path]  Export minion workspace to tarball
   import <tarball> [--name n]    Import minion from tarball
   clone <source> <new-name>    Clone a minion (task-only by default)
+  retry <name>                 Retry a completed/failed minion (fresh container, same task)
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -813,6 +814,29 @@ async function main() {
                 console.log(`✅ Cloned minion: ${result.name}`);
                 console.log(`   Mode: ${result.mode}`);
                 console.log(`   Path: ${result.path}`);
+                break;
+            }
+
+            case 'retry': {
+                const name = parsed._[0];
+                if (!name) {
+                    console.error('❌ Name required: hive retry <name>');
+                    process.exit(1);
+                }
+
+                const claudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+                const retryOptions = {
+                    claudeToken,
+                    keepAlive: parsed['keep-alive']
+                };
+                if (parsed.memory) retryOptions.memory = parsed.memory;
+                if (parsed.cpus) retryOptions.cpus = parsed.cpus;
+
+                console.log(`🔄 Retrying minion: ${name}`);
+                const result = hive.retry(name, retryOptions);
+                console.log(`✅ Minion retried`);
+                console.log(`   Container: ${result.containerId.substring(0, 12)}`);
+                console.log(`   Workspace: ${result.minionDir}`);
                 break;
             }
 
