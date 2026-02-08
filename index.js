@@ -21,6 +21,23 @@ class Hive {
         this._ensureDirs();
     }
 
+    /**
+     * Validate a minion name for use as directory and Docker container name
+     */
+    _validateName(name) {
+        if (!name || typeof name !== 'string') {
+            throw new Error('Minion name is required');
+        }
+        if (name.length > 128) {
+            throw new Error(`Minion name too long (${name.length} chars, max 128)`);
+        }
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
+            throw new Error(
+                `Invalid minion name '${name}'. Names must start with a letter or number and contain only letters, numbers, hyphens, underscores, and dots.`
+            );
+        }
+    }
+
     _ensureDirs() {
         if (!fs.existsSync(this.hiveDir)) fs.mkdirSync(this.hiveDir, { recursive: true });
         if (!fs.existsSync(this.minionsDir)) fs.mkdirSync(this.minionsDir, { recursive: true });
@@ -65,8 +82,9 @@ class Hive {
      * Spawn a new minion with a task
      */
     spawn(name, task, options = {}) {
+        this._validateName(name);
         const minionDir = path.join(this.minionsDir, name);
-        
+
         if (fs.existsSync(minionDir)) {
             throw new Error(`Minion ${name} already exists`);
         }
@@ -861,6 +879,7 @@ class Hive {
      * @param {boolean} options.inbox - Include inbox messages if workspace is copied
      */
     clone(sourceName, newName, options = {}) {
+        this._validateName(newName);
         const sourceDir = path.join(this.minionsDir, sourceName);
         const newDir = path.join(this.minionsDir, newName);
 

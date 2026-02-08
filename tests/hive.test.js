@@ -49,6 +49,63 @@ describe('Hive constructor', () => {
     });
 });
 
+// ─── Name Validation ─────────────────────────────────────────────────
+
+describe('Hive._validateName', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('accepts valid alphanumeric names', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.doesNotThrow(() => hive._validateName('my-minion'));
+        assert.doesNotThrow(() => hive._validateName('worker_01'));
+        assert.doesNotThrow(() => hive._validateName('test.v2'));
+        assert.doesNotThrow(() => hive._validateName('A'));
+        assert.doesNotThrow(() => hive._validateName('3workers'));
+    });
+
+    it('rejects empty or missing name', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._validateName(''), 'name is required');
+        assert.throws(() => hive._validateName(null), 'name is required');
+        assert.throws(() => hive._validateName(undefined), 'name is required');
+    });
+
+    it('rejects names with spaces', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._validateName('my minion'), 'Invalid minion name');
+    });
+
+    it('rejects names with special characters', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._validateName('minion@home'), 'Invalid minion name');
+        assert.throws(() => hive._validateName('worker/1'), 'Invalid minion name');
+        assert.throws(() => hive._validateName('test$var'), 'Invalid minion name');
+    });
+
+    it('rejects names starting with dot or dash', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._validateName('.hidden'), 'Invalid minion name');
+        assert.throws(() => hive._validateName('-flag'), 'Invalid minion name');
+    });
+
+    it('rejects names longer than 128 characters', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._validateName('a'.repeat(129)), 'too long');
+    });
+
+    it('accepts names at exactly 128 characters', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.doesNotThrow(() => hive._validateName('a'.repeat(128)));
+    });
+});
+
 // ─── Docker Command Construction ─────────────────────────────────────
 
 describe('Hive._docker command construction', () => {
@@ -177,6 +234,13 @@ describe('Hive.spawn', () => {
             path.join(tmp.dir, 'minions', 'long-task', 'meta.json'), 'utf8'
         ));
         assert.equal(meta.task.length, 200);
+    });
+
+    it('throws on invalid minion name', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.spawn('bad name', 'task'), 'Invalid minion name');
+        assert.throws(() => hive.spawn('', 'task'), 'name is required');
     });
 
     it('throws if minion name already exists', () => {
