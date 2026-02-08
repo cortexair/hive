@@ -1215,6 +1215,102 @@ class Hive {
     }
 
     /**
+     * Get aggregate statistics across all minions
+     * @returns {{ minions, resources, uptime, templates }}
+     */
+    aggregateStats() {
+        const minions = this.list();
+        const now = Date.now();
+
+        // Count by status
+        const running = [];
+        const stopped = [];
+        for (const m of minions) {
+            const s = (m.containerStatus || m.status || '').replace(/^'+|'+$/g, '');
+            if (s === 'running') {
+                running.push(m);
+            } else {
+                stopped.push(m);
+            }
+        }
+
+        const result = {
+            minions: {
+                running: running.length,
+                stopped: stopped.length,
+                total: minions.length
+            },
+            resources: {
+                cpu: 0,
+                memoryBytes: 0,
+                memoryHuman: '0 B'
+            },
+            uptime: {
+                oldest: null,
+                newest: null,
+                average: null
+            },
+            templates: 0
+        };
+
+        // Aggregate resource usage from running containers
+        for (const m of running) {
+            try {
+                const statsOutput = this._docker(`stats hive-${m.name} --no-stream --format "{{json .}}"`);
+                const s = JSON.parse(statsOutput.trim());
+
+                // Parse CPU percentage (e.g., "45.50%")
+                const cpuStr = (s.CPUPerc || '0%').replace('%', '');
+                result.resources.cpu += parseFloat(cpuStr) || 0;
+
+                // Parse memory usage (e.g., "50MiB / 1GiB" - take just the usage part)
+                const memStr = (s.MemUsage || '0B / 0B').split('/')[0].trim();
+                result.resources.memoryBytes += this._parseMemory(memStr);
+            } catch {
+                // Skip containers we can't get stats for
+            }
+        }
+
+        result.resources.memoryHuman = this._humanSize(result.resources.memoryBytes);
+
+        // Uptime stats from running minions
+        if (running.length > 0) {
+            const runtimes = running.map(m => now - new Date(m.createdAt).getTime());
+            runtimes.sort((a, b) => a - b);
+
+            result.uptime.oldest = this._formatAge(runtimes[runtimes.length - 1]);
+            result.uptime.newest = this._formatAge(runtimes[0]);
+            const avg = runtimes.reduce((a, b) => a + b, 0) / runtimes.length;
+            result.uptime.average = this._formatAge(Math.floor(avg));
+        }
+
+        // Template count
+        result.templates = this.templateList().length;
+
+        return result;
+    }
+
+    /**
+     * Parse a memory string (e.g., "50MiB", "1.2GiB", "500kB") to bytes
+     */
+    _parseMemory(str) {
+        const match = str.match(/([\d.]+)\s*(B|KiB|MiB|GiB|kB|MB|GB)/);
+        if (!match) return 0;
+        const value = parseFloat(match[1]);
+        const unit = match[2];
+        const multipliers = {
+            'B': 1,
+            'KiB': 1024,
+            'kB': 1000,
+            'MiB': 1024 * 1024,
+            'MB': 1000000,
+            'GiB': 1024 * 1024 * 1024,
+            'GB': 1000000000
+        };
+        return value * (multipliers[unit] || 1);
+    }
+
+    /**
      * Helper: recursively copy a directory
      */
     _copyDirRecursive(src, dest) {

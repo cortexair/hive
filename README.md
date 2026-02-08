@@ -62,6 +62,15 @@ hive logs worker-1
 hive logs worker-1 -F
 hive logs worker-1 --follow
 
+# Show aggregate hive statistics
+hive stats
+
+# Show stats as JSON
+hive stats --json
+
+# Get resource usage for a specific minion
+hive stats worker-1
+
 # Terminate a minion
 hive kill worker-1
 

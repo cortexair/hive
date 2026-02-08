@@ -27,7 +27,8 @@ Commands:
   status <name> [--json]       Get minion status and output
   health                       Check system health (Docker, image, minions, disk)
   version                      Show Hive version
-  stats <name>                 Get resource usage (CPU, memory, I/O)
+  stats                        Show aggregate hive statistics (--json for JSON)
+  stats <name>                 Get resource usage for a single minion
   top [--interval N]           Live dashboard of all running minions
   logs <name> [--lines N] [-F] Get last N lines of logs (default 50), -F to follow
   wait <name> [--timeout S]    Wait for minion to complete (default: 300s)
@@ -462,18 +463,39 @@ async function main() {
 
             case 'stats': {
                 const name = parsed._[0];
-                if (!name) {
-                    console.error('❌ Name required: hive stats <name>');
-                    process.exit(1);
-                }
+                if (name) {
+                    // Per-minion stats
+                    const stats = hive.stats(name);
+                    console.log(`📊 Minion: ${name}\n`);
+                    console.log(`CPU:     ${stats.CPUPerc || 'N/A'}`);
+                    console.log(`Memory:  ${stats.MemUsage || 'N/A'} (${stats.MemPerc || 'N/A'})`);
+                    console.log(`Net I/O: ${stats.NetIO || 'N/A'}`);
+                    console.log(`Blk I/O: ${stats.BlockIO || 'N/A'}`);
+                    console.log(`PIDs:    ${stats.PIDs || 'N/A'}`);
+                } else {
+                    // Aggregate stats
+                    const s = hive.aggregateStats();
 
-                const stats = hive.stats(name);
-                console.log(`📊 Minion: ${name}\n`);
-                console.log(`CPU:     ${stats.CPUPerc || 'N/A'}`);
-                console.log(`Memory:  ${stats.MemUsage || 'N/A'} (${stats.MemPerc || 'N/A'})`);
-                console.log(`Net I/O: ${stats.NetIO || 'N/A'}`);
-                console.log(`Blk I/O: ${stats.BlockIO || 'N/A'}`);
-                console.log(`PIDs:    ${stats.PIDs || 'N/A'}`);
+                    if (parsed.json) {
+                        console.log(JSON.stringify(s, null, 2));
+                        break;
+                    }
+
+                    console.log('\n🐝 Hive Statistics\n');
+                    console.log(`Minions:   ${s.minions.running} running, ${s.minions.stopped} stopped, ${s.minions.total} total`);
+
+                    const cpuDisplay = Math.round(s.resources.cpu * 10) / 10;
+                    console.log(`Resources: ${cpuDisplay}% CPU, ${s.resources.memoryHuman} memory`);
+
+                    if (s.uptime.oldest) {
+                        console.log(`Uptime:    oldest ${s.uptime.oldest}, newest ${s.uptime.newest}, avg ${s.uptime.average}`);
+                    } else {
+                        console.log('Uptime:    no running minions');
+                    }
+
+                    console.log(`Templates: ${s.templates} saved`);
+                    console.log('');
+                }
                 break;
             }
 

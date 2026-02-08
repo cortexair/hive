@@ -2081,6 +2081,179 @@ describe('Hive.rename', () => {
     });
 });
 
+// ─── _parseMemory ────────────────────────────────────────────────────
+
+describe('Hive._parseMemory', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('parses MiB values', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseMemory('50MiB'), 50 * 1024 * 1024);
+    });
+
+    it('parses GiB values', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseMemory('1.5GiB'), 1.5 * 1024 * 1024 * 1024);
+    });
+
+    it('parses KiB values', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseMemory('512KiB'), 512 * 1024);
+    });
+
+    it('parses B values', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseMemory('1024B'), 1024);
+    });
+
+    it('returns 0 for unparseable strings', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseMemory('unknown'), 0);
+        assert.equal(hive._parseMemory(''), 0);
+    });
+});
+
+// ─── aggregateStats ──────────────────────────────────────────────────
+
+describe('Hive.aggregateStats', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns zeroed stats when no minions exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+
+        const s = hive.aggregateStats();
+        assert.equal(s.minions.running, 0);
+        assert.equal(s.minions.stopped, 0);
+        assert.equal(s.minions.total, 0);
+        assert.equal(s.resources.cpu, 0);
+        assert.equal(s.resources.memoryBytes, 0);
+        assert.equal(s.uptime.oldest, null);
+        assert.equal(s.templates, 0);
+    });
+
+    it('counts running and stopped minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f') && cmd.includes('hive-w1')) return "'running'\n";
+                if (cmd.includes('inspect -f') && cmd.includes('hive-w2')) return "'running'\n";
+                if (cmd.includes('inspect -f') && cmd.includes('hive-w3')) return "'exited'\n";
+                if (cmd.includes('stats')) return JSON.stringify({ CPUPerc: '0%', MemUsage: '0B / 0B' });
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'w1', { containerId: 'sha256:w1' });
+        writeMinionFixture(hive.minionsDir, 'w2', { containerId: 'sha256:w2' });
+        writeMinionFixture(hive.minionsDir, 'w3', { containerId: 'sha256:w3' });
+
+        const s = hive.aggregateStats();
+        assert.equal(s.minions.running, 2);
+        assert.equal(s.minions.stopped, 1);
+        assert.equal(s.minions.total, 3);
+    });
+
+    it('aggregates CPU and memory from running containers', () => {
+        tmp = tmpDir();
+        let callCount = 0;
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f')) return "'running'\n";
+                if (cmd.includes('stats')) {
+                    callCount++;
+                    if (callCount === 1) {
+                        return JSON.stringify({ CPUPerc: '20.5%', MemUsage: '100MiB / 1GiB' });
+                    }
+                    return JSON.stringify({ CPUPerc: '30%', MemUsage: '200MiB / 1GiB' });
+                }
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'a', { containerId: 'sha256:a' });
+        writeMinionFixture(hive.minionsDir, 'b', { containerId: 'sha256:b' });
+
+        const s = hive.aggregateStats();
+        assert.equal(s.resources.cpu, 50.5);
+        assert.equal(s.resources.memoryBytes, 300 * 1024 * 1024);
+    });
+
+    it('computes uptime stats for running minions', () => {
+        tmp = tmpDir();
+        const now = Date.now();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f')) return "'running'\n";
+                if (cmd.includes('stats')) return JSON.stringify({ CPUPerc: '0%', MemUsage: '0B / 0B' });
+                return '';
+            }
+        });
+        // One created 2 days ago, one 1 hour ago
+        writeMinionFixture(hive.minionsDir, 'old', {
+            containerId: 'sha256:old',
+            createdAt: new Date(now - 2 * 86400000).toISOString()
+        });
+        writeMinionFixture(hive.minionsDir, 'new', {
+            containerId: 'sha256:new',
+            createdAt: new Date(now - 3600000).toISOString()
+        });
+
+        const s = hive.aggregateStats();
+        assert.ok(s.uptime.oldest);
+        assert.ok(s.uptime.newest);
+        assert.ok(s.uptime.average);
+        assert.includes(s.uptime.oldest, '2d');
+        assert.includes(s.uptime.newest, '1h');
+    });
+
+    it('counts templates', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.templateSave('tpl-1', 'content 1');
+        hive.templateSave('tpl-2', 'content 2');
+
+        const s = hive.aggregateStats();
+        assert.equal(s.templates, 2);
+    });
+
+    it('handles docker stats failures gracefully', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f')) return "'running'\n";
+                if (cmd.includes('stats')) throw new Error('container not running');
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'fail', { containerId: 'sha256:fail' });
+
+        const s = hive.aggregateStats();
+        assert.equal(s.minions.running, 1);
+        assert.equal(s.resources.cpu, 0);
+        assert.equal(s.resources.memoryBytes, 0);
+    });
+
+    it('returns null uptime fields when no running minions', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'stopped', { containerId: 'sha256:stopped' });
+
+        const s = hive.aggregateStats();
+        assert.equal(s.uptime.oldest, null);
+        assert.equal(s.uptime.newest, null);
+        assert.equal(s.uptime.average, null);
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {
