@@ -46,6 +46,7 @@ Commands:
   network clear <name>           Clear a minion's inbox
   export <name> [--output path]  Export minion workspace to tarball
   import <tarball> [--name n]    Import minion from tarball
+  clone <source> <new-name>    Clone a minion (task-only by default)
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -57,8 +58,9 @@ Options:
   --cpus <limit>         CPU limit (e.g., 0.5, 2)
   --no-sudo              Don't use sudo for Docker commands
   --logs                 Include container logs in export
-  --inbox                Include inbox messages in export
+  --inbox                Include inbox messages in export/clone
   --overwrite            Overwrite existing minion on import
+  --workspace, -w        Clone full workspace (not just task)
 
 Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
@@ -68,6 +70,8 @@ Examples:
   echo "Review the PR" | hive template save quick-review
   hive export worker-1 --logs --inbox
   hive import worker-1-backup.tar.gz --name worker-restored
+  hive clone worker-1 worker-1-retry
+  hive clone worker-1 worker-1-v2 --workspace
   hive list
   hive status worker-1
   hive kill worker-1
@@ -97,6 +101,9 @@ function parseArgs(args) {
         } else if (args[i] === '-t' && args[i + 1]) {
             result.template = args[i + 1];
             i += 2;
+        } else if (args[i] === '-w') {
+            result.workspace = true;
+            i++;
         } else {
             result._.push(args[i]);
             i++;
@@ -734,6 +741,27 @@ async function main() {
                         console.error('Usage: hive template <save|list|show|delete>');
                         process.exit(1);
                 }
+                break;
+            }
+
+            case 'clone': {
+                const sourceName = parsed._[0];
+                const newName = parsed._[1];
+                if (!sourceName || !newName) {
+                    console.error('❌ Usage: hive clone <source> <new-name> [--workspace] [--inbox]');
+                    process.exit(1);
+                }
+
+                const options = {
+                    workspace: parsed.workspace || parsed.w,
+                    inbox: parsed.inbox
+                };
+
+                console.log(`🧬 Cloning minion: ${sourceName} → ${newName}`);
+                const result = hive.clone(sourceName, newName, options);
+                console.log(`✅ Cloned minion: ${result.name}`);
+                console.log(`   Mode: ${result.mode}`);
+                console.log(`   Path: ${result.path}`);
                 break;
             }
 

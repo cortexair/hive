@@ -57,6 +57,12 @@ hive collect worker-1
 
 # Terminate a minion
 hive kill worker-1
+
+# Clone a minion (retry with same task)
+hive clone worker-1 worker-1-retry
+
+# Clone with full workspace (all files)
+hive clone worker-1 worker-1-v2 --workspace
 ```
 
 ## Templates

@@ -830,6 +830,129 @@ class Hive {
 
         return { name, path: destPath, imported: true };
     }
+
+    /**
+     * Clone a minion (copy task and optionally workspace)
+     * @param {string} sourceName - Name of minion to clone
+     * @param {string} newName - Name for the cloned minion
+     * @param {Object} options - Clone options
+     * @param {boolean} options.workspace - Copy full workspace (default: false, just copies task)
+     * @param {boolean} options.inbox - Include inbox messages if workspace is copied
+     */
+    clone(sourceName, newName, options = {}) {
+        const sourceDir = path.join(this.minionsDir, sourceName);
+        const newDir = path.join(this.minionsDir, newName);
+
+        if (!fs.existsSync(sourceDir)) {
+            throw new Error(`Minion '${sourceName}' not found`);
+        }
+
+        if (fs.existsSync(newDir)) {
+            throw new Error(`Minion '${newName}' already exists`);
+        }
+
+        const taskPath = path.join(sourceDir, 'TASK.md');
+        if (!fs.existsSync(taskPath)) {
+            throw new Error(`Source minion has no TASK.md`);
+        }
+
+        if (options.workspace) {
+            // Full workspace copy
+            this._copyDirRecursive(sourceDir, newDir);
+
+            // Update metadata
+            const metaPath = path.join(newDir, 'meta.json');
+            if (fs.existsSync(metaPath)) {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                meta.name = newName;
+                meta.clonedFrom = sourceName;
+                meta.clonedAt = new Date().toISOString();
+                meta.containerId = null;
+                meta.status = 'pending';
+                delete meta.taskStatus;
+                fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            }
+
+            // Remove STATUS file (start fresh)
+            const statusPath = path.join(newDir, 'STATUS');
+            if (fs.existsSync(statusPath)) {
+                fs.rmSync(statusPath);
+            }
+
+            // Clear output directory
+            const outputDir = path.join(newDir, 'output');
+            if (fs.existsSync(outputDir)) {
+                fs.rmSync(outputDir, { recursive: true });
+                fs.mkdirSync(outputDir, { mode: 0o777 });
+            }
+
+            // Optionally copy inbox
+            if (options.inbox) {
+                const sourceInbox = path.join(this.networkDir, sourceName);
+                const newInbox = path.join(this.networkDir, newName);
+                if (fs.existsSync(sourceInbox)) {
+                    this._copyDirRecursive(sourceInbox, newInbox);
+                }
+            }
+
+            return { 
+                name: newName, 
+                clonedFrom: sourceName, 
+                mode: 'workspace',
+                path: newDir
+            };
+        } else {
+            // Task-only clone (fresh workspace)
+            fs.mkdirSync(newDir, { recursive: true, mode: 0o777 });
+            fs.mkdirSync(path.join(newDir, 'output'), { recursive: true, mode: 0o777 });
+            
+            // Copy task
+            const task = fs.readFileSync(taskPath, 'utf8');
+            fs.writeFileSync(path.join(newDir, 'TASK.md'), task, { mode: 0o666 });
+
+            // Create new metadata
+            const sourceMeta = fs.existsSync(path.join(sourceDir, 'meta.json'))
+                ? JSON.parse(fs.readFileSync(path.join(sourceDir, 'meta.json'), 'utf8'))
+                : {};
+            
+            const meta = {
+                name: newName,
+                createdAt: new Date().toISOString(),
+                task: task.substring(0, 200),
+                status: 'pending',
+                containerId: null,
+                clonedFrom: sourceName,
+                clonedAt: new Date().toISOString()
+            };
+            fs.writeFileSync(path.join(newDir, 'meta.json'), JSON.stringify(meta, null, 2));
+
+            return { 
+                name: newName, 
+                clonedFrom: sourceName, 
+                mode: 'task-only',
+                path: newDir
+            };
+        }
+    }
+
+    /**
+     * Helper: recursively copy a directory
+     */
+    _copyDirRecursive(src, dest) {
+        fs.mkdirSync(dest, { recursive: true });
+        const entries = fs.readdirSync(src, { withFileTypes: true });
+        
+        for (const entry of entries) {
+            const srcPath = path.join(src, entry.name);
+            const destPath = path.join(dest, entry.name);
+            
+            if (entry.isDirectory()) {
+                this._copyDirRecursive(srcPath, destPath);
+            } else {
+                fs.copyFileSync(srcPath, destPath);
+            }
+        }
+    }
 }
 
 module.exports = { Hive, HIVE_DIR, IMAGE_NAME };
