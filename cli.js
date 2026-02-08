@@ -52,6 +52,8 @@ Commands:
 
 Options:
   --keep-alive           Keep container running after task
+  --memory <limit>       Memory limit (e.g., 512m, 2g)
+  --cpus <limit>         CPU limit (e.g., 0.5, 2)
   --no-sudo              Don't use sudo for Docker commands
   --logs                 Include container logs in export
   --inbox                Include inbox messages in export
@@ -59,7 +61,7 @@ Options:
 
 Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
-  hive spawn researcher-1 -f research-task.md
+  hive spawn researcher-1 -f research-task.md --memory 1g --cpus 1
   hive spawn worker-2 -t code-review
   hive template save code-review -f review-task.md
   echo "Review the PR" | hive template save quick-review
@@ -201,13 +203,25 @@ async function main() {
                 }
 
                 console.log(`🐝 Spawning minion: ${name}`);
-                const result = hive.spawn(name, task, {
+                const spawnOptions = {
                     claudeToken,
                     keepAlive: parsed['keep-alive']
-                });
+                };
+                
+                // Resource limits
+                if (parsed.memory) {
+                    spawnOptions.memory = parsed.memory;
+                }
+                if (parsed.cpus) {
+                    spawnOptions.cpus = parsed.cpus;
+                }
+                
+                const result = hive.spawn(name, task, spawnOptions);
                 console.log(`✅ Minion spawned`);
                 console.log(`   Container: ${result.containerId.substring(0, 12)}`);
                 console.log(`   Workspace: ${result.minionDir}`);
+                if (parsed.memory) console.log(`   Memory:    ${parsed.memory}`);
+                if (parsed.cpus) console.log(`   CPUs:      ${parsed.cpus}`);
                 break;
             }
 

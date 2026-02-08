@@ -1,6 +1,6 @@
 {
   "name": "@cortexair/hive",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Cortex's AI Minion Orchestration System",
   "main": "index.js",
   "bin": {

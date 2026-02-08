@@ -107,15 +107,27 @@ class Hive {
             envVars.push('-e KEEP_ALIVE=true');
         }
 
+        // Resource limits
+        const resourceArgs = [];
+        if (options.memory) {
+            resourceArgs.push(`--memory=${options.memory}`);
+        }
+        if (options.cpus) {
+            resourceArgs.push(`--cpus=${options.cpus}`);
+        }
+
         // Start container
         const envStr = envVars.join(' ');
+        const resourceStr = resourceArgs.join(' ');
         const containerId = this._docker(
-            `run -d --name hive-${name} ${envStr} -v ${minionDir}:/home/minion/workspace ${IMAGE_NAME}`
+            `run -d --name hive-${name} ${envStr} ${resourceStr} -v ${minionDir}:/home/minion/workspace ${IMAGE_NAME}`
         ).trim();
 
         // Update metadata
         meta.containerId = containerId;
         meta.status = 'running';
+        if (options.memory) meta.memory = options.memory;
+        if (options.cpus) meta.cpus = options.cpus;
         fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify(meta, null, 2));
 
         return { name, containerId, minionDir };

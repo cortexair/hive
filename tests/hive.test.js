@@ -230,6 +230,44 @@ describe('Hive.spawn', () => {
         assert.ok(!runCall.includes('KEEP_ALIVE'));
     });
 
+    it('passes --memory flag when memory option is set', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        captureConsole(() => hive.spawn('mem-test', 'Task', { memory: '512m' }));
+
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=512m');
+    });
+
+    it('passes --cpus flag when cpus option is set', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        captureConsole(() => hive.spawn('cpu-test', 'Task', { cpus: '1.5' }));
+
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--cpus=1.5');
+    });
+
+    it('passes both resource limits when both options are set', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        captureConsole(() => hive.spawn('resource-test', 'Task', { memory: '1g', cpus: '2' }));
+
+        const runCall = hive._dockerCalls.find(c => c.startsWith('run'));
+        assert.includes(runCall, '--memory=1g');
+        assert.includes(runCall, '--cpus=2');
+    });
+
+    it('stores resource limits in metadata', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        captureConsole(() => hive.spawn('meta-resource', 'Task', { memory: '2g', cpus: '0.5' }));
+
+        const meta = JSON.parse(fs.readFileSync(path.join(tmp.dir, 'minions', 'meta-resource', 'meta.json'), 'utf8'));
+        assert.equal(meta.memory, '2g');
+        assert.equal(meta.cpus, '0.5');
+    });
+
     it('auto-builds image when it does not exist', () => {
         tmp = tmpDir();
         hive = createMockHive(tmp.dir, {
