@@ -48,6 +48,7 @@ Commands:
   export <name> [--output path]  Export minion workspace to tarball
   import <tarball> [--name n]    Import minion from tarball
   clone <source> <new-name>    Clone a minion (task-only by default)
+  rename <old> <new>           Rename a minion (must be stopped)
   retry <name>                 Retry a completed/failed minion (fresh container, same task)
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
@@ -837,6 +838,21 @@ async function main() {
                 console.log(`✅ Minion retried`);
                 console.log(`   Container: ${result.containerId.substring(0, 12)}`);
                 console.log(`   Workspace: ${result.minionDir}`);
+                break;
+            }
+
+            case 'rename': {
+                const oldName = parsed._[0];
+                const newName = parsed._[1];
+                if (!oldName || !newName) {
+                    console.error('❌ Usage: hive rename <old-name> <new-name>');
+                    process.exit(1);
+                }
+
+                console.log(`✏️  Renaming minion: ${oldName} → ${newName}`);
+                const result = hive.rename(oldName, newName);
+                console.log(`✅ Minion renamed`);
+                console.log(`   Path: ${result.path}`);
                 break;
             }
 

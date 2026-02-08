@@ -1931,6 +1931,156 @@ describe('Hive.retry', () => {
     });
 });
 
+// ─── Hive.rename ─────────────────────────────────────────────────────
+
+describe('Hive.rename', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('throws if source minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.rename('ghost', 'new-name'), 'not found');
+    });
+
+    it('throws if target name already exists', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'source');
+        writeMinionFixture(hive.minionsDir, 'target');
+        assert.throws(() => hive.rename('source', 'target'), 'already exists');
+    });
+
+    it('throws for invalid new name', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'source');
+        assert.throws(() => hive.rename('source', 'bad name'), 'Invalid minion name');
+        assert.throws(() => hive.rename('source', '.hidden'), 'Invalid minion name');
+    });
+
+    it('renames directory and updates metadata', () => {
+        tmp = tmpDir();
+        // Mock docker to return 'exited' status (stopped container)
+        hive = createMockHive(tmp.dir, {
+            _docker: (cmd) => {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'old-name', {
+            taskContent: 'Test task'
+        });
+
+        const result = hive.rename('old-name', 'new-name');
+
+        assert.equal(result.oldName, 'old-name');
+        assert.equal(result.newName, 'new-name');
+        assert.ok(!fs.existsSync(path.join(hive.minionsDir, 'old-name')));
+        assert.ok(fs.existsSync(path.join(hive.minionsDir, 'new-name')));
+    });
+
+    it('updates meta.json with new name and renamedFrom', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker: (cmd) => {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'alpha');
+
+        hive.rename('alpha', 'beta');
+
+        const meta = JSON.parse(
+            fs.readFileSync(path.join(hive.minionsDir, 'beta', 'meta.json'), 'utf8')
+        );
+        assert.equal(meta.name, 'beta');
+        assert.equal(meta.renamedFrom, 'alpha');
+        assert.ok(meta.renamedAt);
+    });
+
+    it('clears containerId in metadata after rename', () => {
+        tmp = tmpDir();
+        // Mock docker inspect to return 'exited' status
+        hive = createMockHive(tmp.dir, {
+            _docker: (cmd) => {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'withcontainer');
+
+        hive.rename('withcontainer', 'renamed');
+
+        const newMeta = JSON.parse(
+            fs.readFileSync(path.join(hive.minionsDir, 'renamed', 'meta.json'), 'utf8')
+        );
+        assert.equal(newMeta.containerId, null);
+    });
+
+    it('renames network inbox if it exists', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker: (cmd) => {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'msg-source');
+        
+        // Create inbox with a message
+        const inboxDir = path.join(hive.networkDir, 'msg-source');
+        fs.mkdirSync(inboxDir, { recursive: true });
+        fs.writeFileSync(path.join(inboxDir, 'test-msg.json'), '{"body": "hi"}');
+
+        hive.rename('msg-source', 'msg-dest');
+
+        assert.ok(!fs.existsSync(path.join(hive.networkDir, 'msg-source')));
+        assert.ok(fs.existsSync(path.join(hive.networkDir, 'msg-dest')));
+        assert.ok(fs.existsSync(path.join(hive.networkDir, 'msg-dest', 'test-msg.json')));
+    });
+
+    it('preserves workspace files during rename', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir, {
+            _docker: (cmd) => {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                return '';
+            }
+        });
+        writeMinionFixture(hive.minionsDir, 'files', {
+            taskContent: 'My task content'
+        });
+        // Add extra file
+        fs.writeFileSync(
+            path.join(hive.minionsDir, 'files', 'output', 'result.txt'),
+            'test output'
+        );
+
+        hive.rename('files', 'files-renamed');
+
+        const taskContent = fs.readFileSync(
+            path.join(hive.minionsDir, 'files-renamed', 'TASK.md'), 'utf8'
+        );
+        const outputContent = fs.readFileSync(
+            path.join(hive.minionsDir, 'files-renamed', 'output', 'result.txt'), 'utf8'
+        );
+        assert.equal(taskContent, 'My task content');
+        assert.equal(outputContent, 'test output');
+    });
+
+    it('throws when trying to rename a running minion', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'running-minion');
+
+        assert.throws(
+            () => hive.rename('running-minion', 'new-name'),
+            'Cannot rename running minion'
+        );
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {

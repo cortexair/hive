@@ -1158,6 +1158,63 @@ class Hive {
     }
 
     /**
+     * Rename a minion (preserves workspace, updates metadata)
+     * @param {string} oldName - Current minion name
+     * @param {string} newName - New minion name
+     * @returns {{ oldName, newName, path }}
+     */
+    rename(oldName, newName) {
+        this._validateName(newName);
+        const oldDir = path.join(this.minionsDir, oldName);
+        const newDir = path.join(this.minionsDir, newName);
+
+        if (!fs.existsSync(oldDir)) {
+            throw new Error(`Minion '${oldName}' not found`);
+        }
+
+        if (fs.existsSync(newDir)) {
+            throw new Error(`Minion '${newName}' already exists`);
+        }
+
+        // Check if container is running
+        const metaPath = path.join(oldDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (meta.containerId) {
+            try {
+                const status = this._docker(`inspect -f '{{.State.Status}}' hive-${oldName}`).trim().replace(/'/g, '');
+                if (status === 'running' || status === 'paused') {
+                    throw new Error(`Cannot rename running minion. Stop it first: hive kill ${oldName}`);
+                }
+            } catch (e) {
+                if (e.message.includes('Cannot rename')) {
+                    throw e;
+                }
+                // Container doesn't exist, that's fine
+            }
+        }
+
+        // Rename the directory
+        fs.renameSync(oldDir, newDir);
+
+        // Update metadata
+        meta.name = newName;
+        meta.renamedFrom = oldName;
+        meta.renamedAt = new Date().toISOString();
+        meta.containerId = null; // Clear old container reference
+        fs.writeFileSync(path.join(newDir, 'meta.json'), JSON.stringify(meta, null, 2));
+
+        // Rename network inbox if it exists
+        const oldInbox = path.join(this.networkDir, oldName);
+        const newInbox = path.join(this.networkDir, newName);
+        if (fs.existsSync(oldInbox)) {
+            fs.renameSync(oldInbox, newInbox);
+        }
+
+        return { oldName, newName, path: newDir };
+    }
+
+    /**
      * Helper: recursively copy a directory
      */
     _copyDirRecursive(src, dest) {
