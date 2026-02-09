@@ -53,6 +53,7 @@ Commands:
   clone <source> <new-name>    Clone a minion (task-only by default)
   rename <old> <new>           Rename a minion (must be stopped)
   retry <name>                 Retry a completed/failed minion (fresh container, same task)
+  search <query> [--logs]      Search across all minion outputs (and logs with --logs)
   watch-deps [--interval N]    Auto-start waiting minions when dependencies complete
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
@@ -73,6 +74,8 @@ Options:
   --inbox                Include inbox messages in export/clone
   --overwrite            Overwrite existing minion on import
   --workspace, -w        Clone full workspace (not just task)
+  --limit <N>            For search: max number of results
+  --case-sensitive       For search: exact case matching
 
 Examples:
   hive spawn worker-1 "Build a hello world CLI in Node.js"
@@ -924,6 +927,42 @@ async function main() {
                 const result = hive.rename(oldName, newName);
                 console.log(`✅ Minion renamed`);
                 console.log(`   Path: ${result.path}`);
+                break;
+            }
+
+            case 'search': {
+                const query = parsed._[0];
+                if (!query) {
+                    console.error('❌ Query required: hive search <query> [--logs] [--limit N] [--case-sensitive]');
+                    process.exit(1);
+                }
+
+                const searchOptions = {
+                    logs: parsed.logs || false,
+                    limit: parseInt(parsed.limit) || 0,
+                    caseSensitive: parsed['case-sensitive'] || false
+                };
+
+                const results = hive.search(query, searchOptions);
+
+                if (results.length === 0) {
+                    console.log(`No matches found for "${query}"`);
+                    break;
+                }
+
+                console.log(`🔍 Search results for "${query}":\n`);
+
+                let currentMinion = null;
+                for (const r of results) {
+                    if (r.minion !== currentMinion) {
+                        if (currentMinion !== null) console.log('');
+                        console.log(`🐝 ${r.minion} (${r.source})`);
+                        currentMinion = r.minion;
+                    }
+                    console.log(`   ${r.line}: ${r.text}`);
+                }
+
+                console.log(`\n${results.length} match(es) found`);
                 break;
             }
 

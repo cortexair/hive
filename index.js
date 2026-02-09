@@ -1395,6 +1395,78 @@ class Hive {
     }
 
     /**
+     * Search across all minion outputs and optionally container logs
+     * @param {string} query - Search string
+     * @param {Object} options - Search options
+     * @param {boolean} options.caseSensitive - Exact case matching (default: false)
+     * @param {number} options.limit - Max results (0 = unlimited)
+     * @param {boolean} options.logs - Also search container logs
+     * @returns {Array<{minion, source, line, text}>}
+     */
+    search(query, options = {}) {
+        const caseSensitive = options.caseSensitive || false;
+        const limit = options.limit || 0;
+        const includeLogs = options.logs || false;
+        const results = [];
+
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(escaped, caseSensitive ? 'g' : 'gi');
+
+        if (!fs.existsSync(this.minionsDir)) return results;
+
+        for (const name of fs.readdirSync(this.minionsDir)) {
+            const minionDir = path.join(this.minionsDir, name);
+            const metaPath = path.join(minionDir, 'meta.json');
+            if (!fs.existsSync(metaPath)) continue;
+
+            // Search output file
+            const outputPath = path.join(minionDir, 'output', 'claude-output.log');
+            if (fs.existsSync(outputPath)) {
+                const lines = fs.readFileSync(outputPath, 'utf8').split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    regex.lastIndex = 0;
+                    if (regex.test(lines[i])) {
+                        results.push({
+                            minion: name,
+                            source: 'output',
+                            line: i + 1,
+                            text: lines[i]
+                        });
+                        if (limit > 0 && results.length >= limit) return results;
+                    }
+                }
+            }
+
+            // Search container logs if requested
+            if (includeLogs) {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                if (meta.containerId) {
+                    try {
+                        const logs = this._docker(`logs hive-${name} 2>&1`);
+                        const lines = logs.split('\n');
+                        for (let i = 0; i < lines.length; i++) {
+                            regex.lastIndex = 0;
+                            if (regex.test(lines[i])) {
+                                results.push({
+                                    minion: name,
+                                    source: 'logs',
+                                    line: i + 1,
+                                    text: lines[i]
+                                });
+                                if (limit > 0 && results.length >= limit) return results;
+                            }
+                        }
+                    } catch {
+                        // Container may be removed
+                    }
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /**
      * Get aggregate statistics across all minions
      * @returns {{ minions, resources, uptime, templates }}
      */
