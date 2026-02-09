@@ -1467,6 +1467,109 @@ class Hive {
     }
 
     /**
+     * Generate a markdown report of all minions
+     * @returns {string} - Markdown report
+     */
+    report() {
+        const minions = this.list();
+        const now = Date.now();
+        const lines = [];
+
+        lines.push('# Hive Report');
+        lines.push('');
+        lines.push(`Generated: ${new Date().toISOString()}`);
+        lines.push('');
+
+        if (minions.length === 0) {
+            lines.push('No minions found.');
+            return lines.join('\n');
+        }
+
+        // Summary table
+        lines.push('## Minions');
+        lines.push('');
+        lines.push('| Name | Status | Task | Runtime | Exit Code |');
+        lines.push('|------|--------|------|---------|-----------|');
+
+        for (const m of minions) {
+            const status = m.taskStatus || m.status || 'unknown';
+            const task = (m.task || '').replace(/\|/g, '\\|').replace(/\n/g, ' ').substring(0, 60);
+            const runtime = this._formatAge(now - new Date(m.createdAt).getTime());
+
+            // Get exit code from container if available
+            let exitCode = '-';
+            if (m.containerId) {
+                try {
+                    exitCode = this._docker(`inspect -f '{{.State.ExitCode}}' hive-${m.name}`).trim().replace(/'/g, '');
+                    if (m.containerStatus === 'running') exitCode = '-';
+                } catch {
+                    exitCode = '-';
+                }
+            }
+
+            lines.push(`| ${m.name} | ${status} | ${task} | ${runtime} | ${exitCode} |`);
+        }
+
+        // Per-minion output summaries
+        lines.push('');
+        lines.push('## Output Summaries');
+
+        for (const m of minions) {
+            lines.push('');
+            lines.push(`### ${m.name}`);
+            lines.push('');
+
+            const outputPath = path.join(this.minionsDir, m.name, 'output', 'claude-output.log');
+            if (fs.existsSync(outputPath)) {
+                const output = fs.readFileSync(outputPath, 'utf8');
+                if (output.trim()) {
+                    const summary = output.substring(0, 500);
+                    lines.push('```');
+                    lines.push(summary);
+                    if (output.length > 500) lines.push('... (truncated)');
+                    lines.push('```');
+                } else {
+                    lines.push('_No output yet._');
+                }
+            } else {
+                lines.push('_No output yet._');
+            }
+        }
+
+        // Aggregate stats
+        lines.push('');
+        lines.push('## Stats');
+        lines.push('');
+
+        const byStatus = {};
+        let running = 0;
+        for (const m of minions) {
+            const s = m.taskStatus || m.status || 'unknown';
+            byStatus[s] = (byStatus[s] || 0) + 1;
+            const cs = (m.containerStatus || '').replace(/'/g, '');
+            if (cs === 'running') running++;
+        }
+
+        lines.push(`- **Total minions:** ${minions.length}`);
+        lines.push(`- **Running:** ${running}`);
+        for (const [status, count] of Object.entries(byStatus)) {
+            lines.push(`- **${status}:** ${count}`);
+        }
+
+        const runtimes = minions.map(m => now - new Date(m.createdAt).getTime());
+        if (runtimes.length > 0) {
+            runtimes.sort((a, b) => a - b);
+            const avg = runtimes.reduce((a, b) => a + b, 0) / runtimes.length;
+            lines.push(`- **Avg runtime:** ${this._formatAge(Math.floor(avg))}`);
+            lines.push(`- **Oldest:** ${this._formatAge(runtimes[runtimes.length - 1])}`);
+            lines.push(`- **Newest:** ${this._formatAge(runtimes[0])}`);
+        }
+
+        lines.push('');
+        return lines.join('\n');
+    }
+
+    /**
      * Get aggregate statistics across all minions
      * @returns {{ minions, resources, uptime, templates }}
      */

@@ -53,6 +53,7 @@ Commands:
   clone <source> <new-name>    Clone a minion (task-only by default)
   rename <old> <new>           Rename a minion (must be stopped)
   retry <name>                 Retry a completed/failed minion (fresh container, same task)
+  report [-o file.md]           Generate markdown report of all minions
   search <query> [--logs]      Search across all minion outputs (and logs with --logs)
   watch-deps [--interval N]    Auto-start waiting minions when dependencies complete
   template save <name>         Save a template from stdin or --file
@@ -120,6 +121,9 @@ function parseArgs(args) {
             i++;
         } else if (args[i] === '-t' && args[i + 1]) {
             result.template = args[i + 1];
+            i += 2;
+        } else if (args[i] === '-o' && args[i + 1]) {
+            result.output = args[i + 1];
             i += 2;
         } else if (args[i] === '-w') {
             result.workspace = true;
@@ -963,6 +967,19 @@ async function main() {
                 }
 
                 console.log(`\n${results.length} match(es) found`);
+                break;
+            }
+
+            case 'report': {
+                const md = hive.report();
+                const outFile = parsed.output || parsed.o;
+
+                if (outFile) {
+                    fs.writeFileSync(outFile, md);
+                    console.log(`📝 Report saved to: ${outFile}`);
+                } else {
+                    console.log(md);
+                }
                 break;
             }
 
