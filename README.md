@@ -81,6 +81,35 @@ hive clone worker-1 worker-1-retry
 hive clone worker-1 worker-1-v2 --workspace
 ```
 
+## Timeouts
+
+Automatically kill minions that run too long - useful for preventing runaway tasks.
+
+```bash
+# Spawn a minion with a timeout (auto-kill after 30 minutes)
+hive spawn worker-1 "Quick task" --timeout 30m
+
+# Set timeout on an existing minion
+hive timeout set worker-1 2h
+
+# Check timeout status
+hive timeout show worker-1
+
+# Clear a timeout
+hive timeout clear worker-1
+
+# Manually check and kill all expired minions
+hive timeout check
+
+# Preview what would be killed (dry run)
+hive timeout check --dry-run
+
+# Watch for timeouts continuously (daemon mode)
+hive watch-timeouts
+```
+
+Duration formats: `30s` (seconds), `5m` (minutes), `2h` (hours), `1d` (days)
+
 ## Templates
 
 Reusable task definitions stored in `~/.hive/templates/` as `.md` files.

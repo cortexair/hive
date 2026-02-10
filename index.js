@@ -144,8 +144,13 @@ class Hive {
         // Update metadata
         meta.containerId = containerId;
         meta.status = 'running';
+        meta.startedAt = new Date().toISOString();
         if (options.memory) meta.memory = options.memory;
         if (options.cpus) meta.cpus = options.cpus;
+        if (options.timeout) {
+            meta.timeout = options.timeout;
+            meta.timeoutAt = new Date(Date.now() + this._parseDuration(options.timeout)).toISOString();
+        }
         fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify(meta, null, 2));
 
         return { name, containerId, minionDir };
@@ -265,6 +270,14 @@ class Hive {
         meta.startedAt = new Date().toISOString();
         if (memory) meta.memory = memory;
         if (cpus) meta.cpus = cpus;
+        
+        // Handle timeout - carry forward from meta or use new option
+        const timeout = options.timeout || meta.timeout;
+        if (timeout) {
+            meta.timeout = timeout;
+            meta.timeoutAt = new Date(Date.now() + this._parseDuration(timeout)).toISOString();
+        }
+        
         fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
         return { name, containerId, minionDir };
@@ -1171,6 +1184,26 @@ class Hive {
     }
 
     /**
+     * Parse duration string to milliseconds
+     * Accepts: 30s, 5m, 2h, 1d (seconds, minutes, hours, days)
+     * Also accepts plain numbers as seconds
+     */
+    _parseDuration(durStr) {
+        // Plain number = seconds
+        if (/^\d+$/.test(durStr)) {
+            return parseInt(durStr, 10) * 1000;
+        }
+        const match = durStr.match(/^(\d+)(s|m|h|d)$/);
+        if (!match) {
+            throw new Error(`Invalid duration format: ${durStr}. Use: 30s, 5m, 2h, 1d or plain seconds`);
+        }
+        const num = parseInt(match[1], 10);
+        const unit = match[2];
+        const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+        return num * multipliers[unit];
+    }
+
+    /**
      * Prune completed minions older than a threshold
      * @param {Object} options - Prune options
      * @param {string} options.olderThan - Age threshold (e.g., '7d', '24h', '30m')
@@ -1240,6 +1273,157 @@ class Hive {
         if (days > 0) return `${days}d ${hours}h`;
         if (hours > 0) return `${hours}h ${minutes}m`;
         return `${minutes}m`;
+    }
+
+    /**
+     * Set or update timeout on an existing minion
+     * @param {string} name - Minion name
+     * @param {string|null} duration - Timeout duration (e.g., '30m', '2h') or null to clear
+     * @returns {{ name, timeout, timeoutAt }}
+     */
+    timeout(name, duration) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (duration === null || duration === 'clear') {
+            // Clear timeout
+            delete meta.timeout;
+            delete meta.timeoutAt;
+            fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            return { name, timeout: null, timeoutAt: null };
+        }
+
+        // Set timeout from now (for running minions) or from startedAt if set
+        const baseTime = meta.startedAt ? new Date(meta.startedAt).getTime() : Date.now();
+        const timeoutMs = this._parseDuration(duration);
+        const timeoutAt = new Date(baseTime + timeoutMs);
+
+        meta.timeout = duration;
+        meta.timeoutAt = timeoutAt.toISOString();
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+        return { name, timeout: duration, timeoutAt: meta.timeoutAt };
+    }
+
+    /**
+     * Get timeout info for a minion
+     * @param {string} name - Minion name
+     * @returns {{ name, timeout, timeoutAt, remaining, expired }}
+     */
+    getTimeout(name) {
+        const minionDir = path.join(this.minionsDir, name);
+        
+        if (!fs.existsSync(minionDir)) {
+            throw new Error(`Minion '${name}' not found`);
+        }
+
+        const metaPath = path.join(minionDir, 'meta.json');
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+        if (!meta.timeoutAt) {
+            return { name, timeout: null, timeoutAt: null, remaining: null, expired: false };
+        }
+
+        const timeoutAt = new Date(meta.timeoutAt).getTime();
+        const now = Date.now();
+        const remaining = timeoutAt - now;
+        const expired = remaining <= 0;
+
+        return {
+            name,
+            timeout: meta.timeout,
+            timeoutAt: meta.timeoutAt,
+            remaining: expired ? 0 : remaining,
+            remainingHuman: expired ? 'expired' : this._formatAge(remaining),
+            expired
+        };
+    }
+
+    /**
+     * Check all running minions for timeouts and kill expired ones
+     * @param {Object} options - Check options
+     * @param {boolean} options.dryRun - Just report what would be killed
+     * @returns {Array<{name, timeoutAt, reason}>} - List of killed minions
+     */
+    checkTimeouts(options = {}) {
+        const killed = [];
+        const now = Date.now();
+        const minions = this.list();
+
+        for (const minion of minions) {
+            // Only check running minions with timeouts
+            const containerStatus = (minion.containerStatus || '').replace(/^'+|'+$/g, '');
+            if (containerStatus !== 'running') continue;
+            if (!minion.timeoutAt) continue;
+
+            const timeoutAt = new Date(minion.timeoutAt).getTime();
+            if (now >= timeoutAt) {
+                if (!options.dryRun) {
+                    // Kill the minion
+                    this.kill(minion.name);
+
+                    // Update metadata with timeout reason
+                    const metaPath = path.join(this.minionsDir, minion.name, 'meta.json');
+                    if (fs.existsSync(metaPath)) {
+                        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                        meta.killedReason = 'timeout';
+                        meta.timeoutExpiredAt = new Date().toISOString();
+                        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+                    }
+
+                    // Write TIMEOUT status file
+                    const statusPath = path.join(this.minionsDir, minion.name, 'STATUS');
+                    fs.writeFileSync(statusPath, 'TIMEOUT');
+                }
+
+                killed.push({
+                    name: minion.name,
+                    timeoutAt: minion.timeoutAt,
+                    timeout: minion.timeout,
+                    reason: 'timeout'
+                });
+            }
+        }
+
+        return killed;
+    }
+
+    /**
+     * Watch for timeouts and auto-kill expired minions
+     * @param {Object} options - Watch options
+     * @param {number} options.intervalMs - Poll interval in ms (default: 10000)
+     * @param {Function} options.onTimeout - Callback for each timed-out minion
+     * @returns {Promise<void>} - Resolves when stopped via SIGINT or stop()
+     */
+    async watchTimeouts(options = {}) {
+        const intervalMs = options.intervalMs || 10000;
+        let running = true;
+
+        const poll = () => {
+            if (!running) return;
+            const killed = this.checkTimeouts();
+            for (const k of killed) {
+                if (options.onTimeout) options.onTimeout(k);
+            }
+        };
+
+        // Allow external stop
+        this._watchTimeoutsStop = () => { running = false; };
+
+        // Initial check
+        poll();
+
+        // Polling loop
+        while (running) {
+            await new Promise(resolve => setTimeout(resolve, intervalMs));
+            poll();
+        }
     }
 
     /**
@@ -1327,11 +1511,20 @@ class Hive {
             task: task.substring(0, 200),
             status: 'running',
             containerId,
+            startedAt: new Date().toISOString(),
             retriedAt: new Date().toISOString(),
             retryOf: oldMeta.createdAt
         };
         if (memory) meta.memory = memory;
         if (cpus) meta.cpus = cpus;
+        
+        // Handle timeout - carry forward from old meta or use new option
+        const timeout = options.timeout || oldMeta.timeout;
+        if (timeout) {
+            meta.timeout = timeout;
+            meta.timeoutAt = new Date(Date.now() + this._parseDuration(timeout)).toISOString();
+        }
+        
         fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
         return { name, containerId, minionDir };

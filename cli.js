@@ -56,6 +56,11 @@ Commands:
   report [-o file.md]           Generate markdown report of all minions
   search <query> [--logs]      Search across all minion outputs (and logs with --logs)
   watch-deps [--interval N]    Auto-start waiting minions when dependencies complete
+  timeout set <name> <dur>     Set a timeout (auto-kill if exceeded)
+  timeout clear <name>         Remove a timeout
+  timeout show <name>          Show timeout status
+  timeout check [--dry-run]    Kill all expired minions
+  watch-timeouts [--interval]  Continuously monitor and kill timed-out minions
   template save <name>         Save a template from stdin or --file
   template list                List all saved templates
   template show <name>         Display a template
@@ -64,7 +69,7 @@ Commands:
 Options:
   --keep-alive           Keep container running after task
   --after <name>         Wait for dependency minion to complete before starting
-  --timeout <seconds>    Timeout for --after waiting (default: 0 = no timeout)
+  --timeout <duration>   Auto-kill minion after duration (30s, 5m, 2h, 1d)
   --memory <limit>       Memory limit (e.g., 512m, 2g)
   --cpus <limit>         CPU limit (e.g., 0.5, 2)
   --no-sudo              Don't use sudo for Docker commands
@@ -83,7 +88,11 @@ Examples:
   hive spawn researcher-1 -f research-task.md --memory 1g --cpus 1
   hive spawn worker-2 -t code-review
   hive spawn step-2 "Analyze results" --after step-1
+  hive spawn worker-3 "Quick task" --timeout 5m
   hive start step-2
+  hive timeout set worker-1 30m
+  hive timeout check --dry-run
+  hive watch-timeouts
   hive template save code-review -f review-task.md
   echo "Review the PR" | hive template save quick-review
   hive export worker-1 --logs --inbox
@@ -247,7 +256,10 @@ async function main() {
                 if (parsed.cpus) {
                     spawnOptions.cpus = parsed.cpus;
                 }
-                
+                if (parsed.timeout) {
+                    spawnOptions.timeout = parsed.timeout;
+                }
+
                 if (parsed.after) {
                     // Dependency chaining: create in waiting state
                     const result = hive.spawnWaiting(name, task, parsed.after, spawnOptions);
@@ -264,6 +276,7 @@ async function main() {
                     console.log(`   Workspace: ${result.minionDir}`);
                     if (parsed.memory) console.log(`   Memory:    ${parsed.memory}`);
                     if (parsed.cpus) console.log(`   CPUs:      ${parsed.cpus}`);
+                    if (parsed.timeout) console.log(`   Timeout:   ${parsed.timeout}`);
                 }
                 break;
             }
@@ -287,11 +300,13 @@ async function main() {
                 };
                 if (parsed.memory) startOptions.memory = parsed.memory;
                 if (parsed.cpus) startOptions.cpus = parsed.cpus;
+                if (parsed.timeout) startOptions.timeout = parsed.timeout;
 
                 const result = hive.start(name, startOptions);
                 console.log(`✅ Minion started`);
                 console.log(`   Container: ${result.containerId.substring(0, 12)}`);
                 console.log(`   Workspace: ${result.minionDir}`);
+                if (parsed.timeout) console.log(`   Timeout:   ${parsed.timeout}`);
                 break;
             }
 
@@ -910,12 +925,14 @@ async function main() {
                 };
                 if (parsed.memory) retryOptions.memory = parsed.memory;
                 if (parsed.cpus) retryOptions.cpus = parsed.cpus;
+                if (parsed.timeout) retryOptions.timeout = parsed.timeout;
 
                 console.log(`🔄 Retrying minion: ${name}`);
                 const result = hive.retry(name, retryOptions);
                 console.log(`✅ Minion retried`);
                 console.log(`   Container: ${result.containerId.substring(0, 12)}`);
                 console.log(`   Workspace: ${result.minionDir}`);
+                if (parsed.timeout) console.log(`   Timeout:   ${parsed.timeout}`);
                 break;
             }
 
@@ -1004,6 +1021,106 @@ async function main() {
                     onStart(s) {
                         const ts = new Date().toLocaleTimeString();
                         console.log(`  [${ts}] ▶️  Started '${s.name}' (dependency '${s.dependsOn}' completed)`);
+                    }
+                });
+                break;
+            }
+
+            case 'timeout': {
+                const subcommand = parsed._[0];
+                const name = parsed._[1];
+
+                switch (subcommand) {
+                    case 'set': {
+                        const duration = parsed._[2];
+                        if (!name || !duration) {
+                            console.error('❌ Usage: hive timeout set <name> <duration>');
+                            console.error('   Duration format: 30s, 5m, 2h, 1d');
+                            process.exit(1);
+                        }
+
+                        const result = hive.timeout(name, duration);
+                        console.log(`⏱️  Timeout set for ${name}`);
+                        console.log(`   Duration: ${result.timeout}`);
+                        console.log(`   Expires:  ${result.timeoutAt}`);
+                        break;
+                    }
+
+                    case 'clear': {
+                        if (!name) {
+                            console.error('❌ Name required: hive timeout clear <name>');
+                            process.exit(1);
+                        }
+
+                        hive.timeout(name, null);
+                        console.log(`⏱️  Timeout cleared for ${name}`);
+                        break;
+                    }
+
+                    case 'show': {
+                        if (!name) {
+                            console.error('❌ Name required: hive timeout show <name>');
+                            process.exit(1);
+                        }
+
+                        const info = hive.getTimeout(name);
+                        if (!info.timeout) {
+                            console.log(`⏱️  ${name}: No timeout set`);
+                        } else if (info.expired) {
+                            console.log(`⏱️  ${name}: EXPIRED (was ${info.timeout})`);
+                        } else {
+                            console.log(`⏱️  ${name}:`);
+                            console.log(`   Duration:  ${info.timeout}`);
+                            console.log(`   Expires:   ${info.timeoutAt}`);
+                            console.log(`   Remaining: ${info.remainingHuman}`);
+                        }
+                        break;
+                    }
+
+                    case 'check': {
+                        const dryRun = parsed['dry-run'] || parsed.dryRun;
+                        const killed = hive.checkTimeouts({ dryRun });
+
+                        if (killed.length === 0) {
+                            console.log('⏱️  No expired timeouts');
+                        } else {
+                            console.log(`⏱️  ${dryRun ? 'Would kill' : 'Killed'} ${killed.length} timed-out minion(s):\n`);
+                            for (const k of killed) {
+                                console.log(`   ${k.name} (timeout: ${k.timeout}, expired: ${k.timeoutAt})`);
+                            }
+                        }
+                        break;
+                    }
+
+                    default:
+                        console.error('❌ Usage: hive timeout <set|clear|show|check>');
+                        console.error('   set <name> <duration>  - Set timeout (30s, 5m, 2h, 1d)');
+                        console.error('   clear <name>           - Remove timeout');
+                        console.error('   show <name>            - Show timeout status');
+                        console.error('   check [--dry-run]      - Kill expired minions');
+                        process.exit(1);
+                }
+                break;
+            }
+
+            case 'watch-timeouts': {
+                const intervalSec = parseInt(parsed.interval) || 10;
+                const intervalMs = intervalSec * 1000;
+
+                console.log(`⏱️  Watching for timeouts every ${intervalSec}s...`);
+                console.log('   Press Ctrl+C to stop\n');
+
+                process.on('SIGINT', () => {
+                    if (hive._watchTimeoutsStop) hive._watchTimeoutsStop();
+                    console.log('\n\n👋 Stopped watching timeouts');
+                    process.exit(0);
+                });
+
+                await hive.watchTimeouts({
+                    intervalMs,
+                    onTimeout(k) {
+                        const ts = new Date().toLocaleTimeString();
+                        console.log(`  [${ts}] ⏱️  Killed '${k.name}' (timeout: ${k.timeout})`);
                     }
                 });
                 break;

@@ -464,3 +464,147 @@ describe('CLI ps alias', () => {
         assert.includes(output, 'No minions active');
     });
 });
+
+// ─── Timeout Commands ────────────────────────────────────────────────
+
+describe('CLI timeout command', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('shows timeout commands in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'timeout set');
+        assert.includes(output, 'timeout clear');
+        assert.includes(output, 'timeout show');
+        assert.includes(output, 'timeout check');
+        assert.includes(output, 'watch-timeouts');
+    });
+
+    it('shows timeout option in help', () => {
+        const { output, exitCode } = runCli('--help');
+        assert.equal(exitCode, 0);
+        assert.includes(output, '--timeout');
+    });
+
+    it('shows usage when no subcommand given', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('timeout', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Usage');
+    });
+
+    it('errors when set is missing args', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('timeout set', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'Usage');
+    });
+
+    it('errors when minion not found for set', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('timeout set nonexistent 30m --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 1);
+        assert.includes(output, 'not found');
+    });
+
+    it('sets timeout on existing minion', () => {
+        tmp = tmpDir();
+        // Create minion
+        const minionDir = path.join(tmp.dir, 'minions', 'worker-1');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'worker-1', status: 'running', containerId: 'abc123',
+            createdAt: new Date().toISOString(), task: 'Test task'
+        }));
+
+        const { output, exitCode } = runCli('timeout set worker-1 30m --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'Timeout set');
+        assert.includes(output, '30m');
+
+        // Verify metadata
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+        assert.equal(meta.timeout, '30m');
+    });
+
+    it('clears timeout on existing minion', () => {
+        tmp = tmpDir();
+        // Create minion with timeout
+        const minionDir = path.join(tmp.dir, 'minions', 'worker-1');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'worker-1', status: 'running', containerId: 'abc123',
+            createdAt: new Date().toISOString(), task: 'Test task',
+            timeout: '30m', timeoutAt: new Date().toISOString()
+        }));
+
+        const { output, exitCode } = runCli('timeout clear worker-1 --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'cleared');
+
+        // Verify metadata
+        const meta = JSON.parse(fs.readFileSync(path.join(minionDir, 'meta.json'), 'utf8'));
+        assert.ok(!meta.timeout);
+    });
+
+    it('shows timeout info', () => {
+        tmp = tmpDir();
+        // Create minion with timeout
+        const minionDir = path.join(tmp.dir, 'minions', 'worker-1');
+        fs.mkdirSync(minionDir, { recursive: true });
+        const futureTime = new Date(Date.now() + 3600000).toISOString();
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'worker-1', status: 'running', containerId: 'abc123',
+            createdAt: new Date().toISOString(), task: 'Test task',
+            timeout: '1h', timeoutAt: futureTime
+        }));
+
+        const { output, exitCode } = runCli('timeout show worker-1 --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, '1h');
+        assert.includes(output, 'Remaining');
+    });
+
+    it('shows no timeout when none set', () => {
+        tmp = tmpDir();
+        // Create minion without timeout
+        const minionDir = path.join(tmp.dir, 'minions', 'worker-1');
+        fs.mkdirSync(minionDir, { recursive: true });
+        fs.writeFileSync(path.join(minionDir, 'meta.json'), JSON.stringify({
+            name: 'worker-1', status: 'running', containerId: 'abc123',
+            createdAt: new Date().toISOString(), task: 'Test task'
+        }));
+
+        const { output, exitCode } = runCli('timeout show worker-1 --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'No timeout');
+    });
+
+    it('check reports no expired timeouts', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('timeout check --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        assert.includes(output, 'No expired');
+    });
+
+    it('check --dry-run shows what would be killed', () => {
+        tmp = tmpDir();
+        const { output, exitCode } = runCli('timeout check --dry-run --no-sudo', { hiveDir: tmp.dir });
+        assert.equal(exitCode, 0);
+        // Either shows 'No expired' or 'Would kill'
+        assert.ok(output.includes('No expired') || output.includes('Would kill'));
+    });
+});
+
+describe('CLI spawn with --timeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('applies timeout when spawning', () => {
+        tmp = tmpDir();
+        // We can't actually spawn (no Docker), but we can test the arg parsing
+        // by checking that error message doesn't complain about the option
+        const { output } = runCli('spawn worker-1 "Task" --timeout 30m --no-sudo', { hiveDir: tmp.dir });
+        // Should fail at Docker step, not at arg parsing
+        assert.ok(!output.includes('Unknown option'));
+    });
+});

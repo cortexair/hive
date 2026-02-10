@@ -2622,6 +2622,391 @@ describe('Hive.checkAndStartDependents', () => {
     });
 });
 
+// ─── Duration Parsing ────────────────────────────────────────────────
+
+describe('Hive._parseDuration', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('parses seconds', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseDuration('30s'), 30000);
+        assert.equal(hive._parseDuration('1s'), 1000);
+    });
+
+    it('parses minutes', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseDuration('5m'), 300000);
+        assert.equal(hive._parseDuration('1m'), 60000);
+    });
+
+    it('parses hours', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseDuration('2h'), 7200000);
+        assert.equal(hive._parseDuration('1h'), 3600000);
+    });
+
+    it('parses days', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseDuration('1d'), 86400000);
+        assert.equal(hive._parseDuration('7d'), 604800000);
+    });
+
+    it('parses plain numbers as seconds', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.equal(hive._parseDuration('60'), 60000);
+        assert.equal(hive._parseDuration('300'), 300000);
+    });
+
+    it('throws on invalid format', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive._parseDuration('abc'), 'Invalid duration');
+        assert.throws(() => hive._parseDuration('5x'), 'Invalid duration');
+    });
+});
+
+// ─── Timeout Management ──────────────────────────────────────────────
+
+describe('Hive.timeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('sets timeout on existing minion', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            startedAt: new Date().toISOString()
+        });
+
+        const result = hive.timeout('worker-1', '30m');
+        assert.equal(result.name, 'worker-1');
+        assert.equal(result.timeout, '30m');
+        assert.ok(result.timeoutAt);
+
+        // Verify metadata updated
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '30m');
+        assert.ok(meta.timeoutAt);
+    });
+
+    it('clears timeout when duration is null', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            extraMeta: { timeout: '30m', timeoutAt: new Date(Date.now() + 60000).toISOString() }
+        });
+
+        const result = hive.timeout('worker-1', null);
+        assert.equal(result.timeout, null);
+        assert.equal(result.timeoutAt, null);
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.ok(!meta.timeout);
+        assert.ok(!meta.timeoutAt);
+    });
+
+    it('clears timeout when duration is "clear"', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            extraMeta: { timeout: '30m', timeoutAt: new Date().toISOString() }
+        });
+
+        hive.timeout('worker-1', 'clear');
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.ok(!meta.timeout);
+    });
+
+    it('throws if minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.timeout('nonexistent', '5m'), 'not found');
+    });
+});
+
+describe('Hive.getTimeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns null values when no timeout set', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', { status: 'running' });
+
+        const info = hive.getTimeout('worker-1');
+        assert.equal(info.name, 'worker-1');
+        assert.equal(info.timeout, null);
+        assert.equal(info.timeoutAt, null);
+        assert.equal(info.remaining, null);
+        assert.equal(info.expired, false);
+    });
+
+    it('returns timeout info with remaining time', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const futureTime = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            extraMeta: { timeout: '1h', timeoutAt: futureTime }
+        });
+
+        const info = hive.getTimeout('worker-1');
+        assert.equal(info.timeout, '1h');
+        assert.ok(info.remaining > 0);
+        assert.equal(info.expired, false);
+    });
+
+    it('marks expired timeout', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const pastTime = new Date(Date.now() - 60000).toISOString(); // 1 min ago
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            extraMeta: { timeout: '5m', timeoutAt: pastTime }
+        });
+
+        const info = hive.getTimeout('worker-1');
+        assert.equal(info.expired, true);
+        assert.equal(info.remaining, 0);
+        assert.equal(info.remainingHuman, 'expired');
+    });
+
+    it('throws if minion does not exist', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        assert.throws(() => hive.getTimeout('nonexistent'), 'not found');
+    });
+});
+
+describe('Hive.checkTimeouts', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('returns empty array when no timeouts expired', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const futureTime = new Date(Date.now() + 3600000).toISOString();
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            containerStatus: 'running',
+            extraMeta: { timeout: '1h', timeoutAt: futureTime }
+        });
+
+        const killed = hive.checkTimeouts();
+        assert.deepEqual(killed, []);
+    });
+
+    it('kills minion with expired timeout', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const pastTime = new Date(Date.now() - 60000).toISOString();
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            containerStatus: 'running',
+            extraMeta: { timeout: '5m', timeoutAt: pastTime }
+        });
+
+        const killed = hive.checkTimeouts();
+        assert.equal(killed.length, 1);
+        assert.equal(killed[0].name, 'worker-1');
+        assert.equal(killed[0].reason, 'timeout');
+
+        // Verify STATUS file written
+        const statusPath = path.join(hive.minionsDir, 'worker-1', 'STATUS');
+        assert.equal(fs.readFileSync(statusPath, 'utf8'), 'TIMEOUT');
+
+        // Verify meta updated
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.killedReason, 'timeout');
+    });
+
+    it('dry-run does not kill', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const pastTime = new Date(Date.now() - 60000).toISOString();
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            containerStatus: 'running',
+            extraMeta: { timeout: '5m', timeoutAt: pastTime }
+        });
+
+        const killed = hive.checkTimeouts({ dryRun: true });
+        assert.equal(killed.length, 1);
+
+        // Verify STATUS file NOT written
+        const statusPath = path.join(hive.minionsDir, 'worker-1', 'STATUS');
+        assert.ok(!fs.existsSync(statusPath));
+    });
+
+    it('ignores non-running containers', () => {
+        tmp = tmpDir();
+        // Override docker inspect to return 'exited' for this container
+        hive = createMockHive(tmp.dir, {
+            _docker(cmd) {
+                if (cmd.includes('inspect -f')) return "'exited'\n";
+                if (cmd.includes('image inspect')) return '[]';
+                return '';
+            }
+        });
+        const pastTime = new Date(Date.now() - 60000).toISOString();
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'killed',
+            containerId: 'sha256:abc',
+            extraMeta: { timeout: '5m', timeoutAt: pastTime }
+        });
+
+        const killed = hive.checkTimeouts();
+        assert.deepEqual(killed, []);
+    });
+
+    it('ignores minions without timeouts', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:abc',
+            containerStatus: 'running'
+        });
+
+        const killed = hive.checkTimeouts();
+        assert.deepEqual(killed, []);
+    });
+});
+
+describe('Hive.spawn with timeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('stores timeout in metadata when provided', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        hive.spawn('worker-1', 'Task', { timeout: '30m' });
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '30m');
+        assert.ok(meta.timeoutAt);
+    });
+
+    it('calculates timeoutAt based on spawn time', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        const before = Date.now();
+        hive.spawn('worker-1', 'Task', { timeout: '1h' });
+        const after = Date.now();
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        const timeoutAt = new Date(meta.timeoutAt).getTime();
+        
+        // timeoutAt should be ~1 hour from now
+        assert.ok(timeoutAt >= before + 3600000 - 1000);
+        assert.ok(timeoutAt <= after + 3600000 + 1000);
+    });
+});
+
+describe('Hive.start with timeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('applies timeout from options', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'pending',
+            taskContent: 'Task'
+        });
+
+        hive.start('worker-1', { timeout: '2h' });
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '2h');
+        assert.ok(meta.timeoutAt);
+    });
+
+    it('carries forward timeout from meta if not overridden', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'pending',
+            taskContent: 'Task',
+            extraMeta: { timeout: '30m' }
+        });
+
+        hive.start('worker-1');
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '30m');
+        assert.ok(meta.timeoutAt);
+    });
+});
+
+describe('Hive.retry with timeout', () => {
+    afterEach(() => { if (tmp) tmp.cleanup(); });
+
+    it('carries forward timeout from old meta', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:old',
+            taskStatus: 'FAILED',
+            taskContent: 'Do the task',
+            extraMeta: { timeout: '1h' }
+        });
+
+        hive.retry('worker-1');
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '1h');
+        assert.ok(meta.timeoutAt);
+    });
+
+    it('allows overriding timeout', () => {
+        tmp = tmpDir();
+        hive = createMockHive(tmp.dir);
+        writeMinionFixture(hive.minionsDir, 'worker-1', {
+            status: 'running',
+            containerId: 'sha256:old',
+            taskStatus: 'FAILED',
+            taskContent: 'Do the task',
+            extraMeta: { timeout: '1h' }
+        });
+
+        hive.retry('worker-1', { timeout: '30m' });
+
+        const meta = JSON.parse(fs.readFileSync(
+            path.join(hive.minionsDir, 'worker-1', 'meta.json'), 'utf8'
+        ));
+        assert.equal(meta.timeout, '30m');
+    });
+});
+
 // ─── Module Exports ──────────────────────────────────────────────────
 
 describe('Module exports', () => {
